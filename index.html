@@ -1101,14 +1101,18 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       const u = getUsuarioAtual();
       try {
         const { data, error } = await supabaseClient.rpc('criar_pesquisa', {
-          p_codigo:        dados.codigo || '',
-          p_nome:          dados.nome,
-          p_cidade:        dados.cidade || '',
-          p_meta:          parseInt(dados.meta) || 0,
-          p_abordagem:     dados.abordagem || '',
-          p_encerramento:  dados.encerramento || '',
-          p_usuario_id:    u.id,
-          p_usuario_nome:  u.nome
+          p_codigo:             dados.codigo || '',
+          p_nome:               dados.nome,
+          p_cidade:             dados.cidade || '',
+          p_meta:               parseInt(dados.meta) || 0,
+          p_abordagem:          dados.abordagem || '',
+          p_encerramento:       dados.encerramento || '',
+          // ─── B4: persistir tipo de cota e matriz 4D no banco ───
+          p_tipo_cota:          dados.tipoCota || 'marginal',
+          p_matriz_4d:          dados.matriz4D || null,
+          p_transbordo_cruzado: (typeof dados.transbordoCruzado === 'number') ? dados.transbordoCruzado : 10,
+          p_usuario_id:         u.id,
+          p_usuario_nome:       u.nome
         });
         if (error) return { ok:false, data:null, error: error.message };
         return { ok:true, data: (data && data[0]) || null, error:null };
@@ -1121,16 +1125,20 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       const u = getUsuarioAtual();
       try {
         const { data, error } = await supabaseClient.rpc('atualizar_pesquisa', {
-          p_id:            id,
-          p_codigo:        dados.codigo || '',
-          p_nome:          dados.nome,
-          p_cidade:        dados.cidade || '',
-          p_meta:          parseInt(dados.meta) || 0,
-          p_ativa:         dados.ativa !== false,
-          p_abordagem:     dados.abordagem || '',
-          p_encerramento:  dados.encerramento || '',
-          p_usuario_id:    u.id,
-          p_usuario_nome:  u.nome
+          p_id:                 id,
+          p_codigo:             dados.codigo || '',
+          p_nome:               dados.nome,
+          p_cidade:             dados.cidade || '',
+          p_meta:               parseInt(dados.meta) || 0,
+          p_ativa:              dados.ativa !== false,
+          p_abordagem:          dados.abordagem || '',
+          p_encerramento:       dados.encerramento || '',
+          // ─── B4: persistir tipo de cota e matriz 4D no banco ───
+          p_tipo_cota:          dados.tipoCota || 'marginal',
+          p_matriz_4d:          dados.matriz4D || null,
+          p_transbordo_cruzado: (typeof dados.transbordoCruzado === 'number') ? dados.transbordoCruzado : 10,
+          p_usuario_id:         u.id,
+          p_usuario_nome:       u.nome
         });
         if (error) return { ok:false, data:null, error: error.message };
         return { ok:true, data, error:null };
@@ -1797,12 +1805,14 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
           cotas: cotas,
           // Preserva campos locais que não vêm do banco (ponderação, etc.)
           ponderacoes: pLocal?.ponderacoes || [],
-          // ─── Bug fix tipoCota — só vive em localStorage (banco ainda não tem coluna)
-          // Preserva o valor local; se nunca foi definido, default = 'marginal'
-          tipoCota: pLocal?.tipoCota || 'marginal',
-          // ─── Bug fix matriz 4D — preserva (vai ser usado pela Etapa 4.12)
-          matriz4D: pLocal?.matriz4D || null,
-          transbordoCruzado: pLocal?.transbordoCruzado ?? 10
+          // ─── B4: tipoCota / matriz4D / transbordoCruzado agora vêm do banco ───
+          // Banco é fonte da verdade; localStorage só é usado como fallback se
+          // a coluna vier null (pesquisa antiga que ainda não foi resalva).
+          tipoCota:          pBanco.tipo_cota || pLocal?.tipoCota || 'marginal',
+          matriz4D:          pBanco.matriz_4d || pLocal?.matriz4D || null,
+          transbordoCruzado: (pBanco.transbordo_cruzado != null)
+                               ? pBanco.transbordo_cruzado
+                               : (pLocal?.transbordoCruzado ?? 10)
         };
 
         novaLista.push(pNova);
@@ -6566,7 +6576,11 @@ async function salvarQ() {
       meta: editandoQ.meta,
       ativa: editandoQ.ativa,
       abordagem: editandoQ.abordagem,
-      encerramento: editandoQ.encerramento
+      encerramento: editandoQ.encerramento,
+      // ─── B4: tipo de cota e matriz 4D agora persistem no banco ───
+      tipoCota:          editandoQ.tipoCota || 'marginal',
+      matriz4D:          editandoQ.matriz4D || null,
+      transbordoCruzado: (typeof editandoQ.transbordoCruzado === 'number') ? editandoQ.transbordoCruzado : 10
     };
 
     let resultadoBanco;
@@ -16515,7 +16529,11 @@ async function confirmarImport() {
         cidade: q.cidade || '',
         meta: q.meta || 0,
         abordagem: q.abordagem || '',
-        encerramento: q.encerramento || ''
+        encerramento: q.encerramento || '',
+        // ─── B4: tipo de cota e matriz 4D agora persistem no banco ───
+        tipoCota:          q.tipoCota || 'marginal',
+        matriz4D:          q.matriz4D || null,
+        transbordoCruzado: (typeof q.transbordoCruzado === 'number') ? q.transbordoCruzado : 10
       };
       const r = await window.pesquisaSb.criarPesquisa(dadosBanco);
       if (r.ok && r.data && r.data.id) {
