@@ -3980,6 +3980,11 @@ async function confirmarLoginOp() {
   } catch(e) {}
   window._sessaoToken = r.sessao_token;
   window._sessaoOpId = r.op.id;
+  // Inicia Realtime para operador receber atualizações de perguntas/cotas em tempo real
+  if (typeof window.iniciarRealtimePesquisas === 'function') {
+    try { window.iniciarRealtimePesquisas(); }
+    catch(e) { console.error('Falha ao iniciar Realtime (operador):', e); }
+  }
   iniciarPainelOp();
 }
 
