@@ -2022,6 +2022,10 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
           renderCotas();
         }
       } else if (tab === 'dash' && typeof pgDash === 'function') pgDash();
+      // Se operador está na tela inicial, atualiza questionário em tempo real
+      if (typeof renderOpInicio === 'function' && document.getElementById('op-body')) {
+        renderOpInicio();
+      }
       // outras telas seguem com dados in-memory; ao trocar de aba, vão pegar atualizado
     } catch(e) { console.error('Erro re-renderizando após Realtime:', e); }
   };
@@ -6183,6 +6187,8 @@ function renderEditorQ(titulo) {
       <span class="p-txt">${p.txt||''}</span>
       <span class="p-tipo">${p.tipo}</span>
       <span style="font-size:10px;font-family:monospace;color:#aaa">${p.var_cod||''}</span>
+      <button class="btn btn-sm" onclick="moverPerg('${p.id}',-1)" title="Mover para cima" ${i===0?'disabled':''} style="padding:2px 7px;font-size:13px">↑</button>
+      <button class="btn btn-sm" onclick="moverPerg('${p.id}',1)" title="Mover para baixo" ${i===(q.perguntas||[]).length-1?'disabled':''} style="padding:2px 7px;font-size:13px">↓</button>
       <button class="btn btn-sm" onclick="editarPergIndividual('${p.id}')" title="Editar pergunta">✏</button>
       <button class="btn btn-sm btn-d" onclick="remPerg('${p.id}')">×</button>
     </div>`).join('') || '<p style="font-size:13px;color:#c4cad8;margin-bottom:8px">Nenhuma pergunta ainda. Adicione abaixo.</p>';
@@ -6333,6 +6339,19 @@ function addPerg() {
   toast('✓ Pergunta adicionada');
 }
 
+function moverPerg(id, direcao) {
+  const pergs = editandoQ.perguntas;
+  const idx = pergs.findIndex(p => p.id === id);
+  if (idx < 0) return;
+  const novoIdx = idx + direcao;
+  if (novoIdx < 0 || novoIdx >= pergs.length) return;
+  // Troca as posições
+  [pergs[idx], pergs[novoIdx]] = [pergs[novoIdx], pergs[idx]];
+  // Renumera
+  pergs.forEach((p, i) => p.num = i + 1);
+  atualizarListaPergs();
+}
+
 function remPerg(id) {
   editandoQ.perguntas = editandoQ.perguntas.filter(p => p.id !== id);
   editandoQ.perguntas.forEach((p,i) => p.num = i+1);
@@ -6346,6 +6365,8 @@ function atualizarListaPergs() {
       <span class="p-txt">${p.txt||''}</span>
       <span class="p-tipo">${p.tipo}</span>
       <span style="font-size:10px;font-family:monospace;color:#aaa">${p.var_cod}</span>
+      <button class="btn btn-sm" onclick="moverPerg('${p.id}',-1)" title="Mover para cima" ${i===0?'disabled':''} style="padding:2px 7px;font-size:13px">↑</button>
+      <button class="btn btn-sm" onclick="moverPerg('${p.id}',1)" title="Mover para baixo" ${i===(editandoQ.perguntas||[]).length-1?'disabled':''} style="padding:2px 7px;font-size:13px">↓</button>
       <button class="btn btn-sm" onclick="editarPergIndividual('${p.id}')" title="Editar">✏</button>
       <button class="btn btn-sm btn-d" onclick="remPerg('${p.id}')">×</button>
     </div>`).join('') || '<p style="font-size:13px;color:#aaa">Nenhuma pergunta ainda.</p>';
