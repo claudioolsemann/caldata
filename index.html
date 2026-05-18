@@ -2022,9 +2022,14 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
           renderCotas();
         }
       } else if (tab === 'dash' && typeof pgDash === 'function') pgDash();
-      // Se operador está na tela inicial, atualiza questionário em tempo real
-      if (typeof renderOpInicio === 'function' && document.getElementById('op-body')) {
-        renderOpInicio();
+      // Atualiza tela do operador se estiver visível (qualquer tela op)
+      if (typeof renderOpInicio === 'function') {
+        const opBody = document.getElementById('op-body');
+        const opPerg = document.getElementById('op-perg');
+        // Só re-renderiza se operador está na tela inicial (não durante entrevista)
+        if (opBody && !opPerg) {
+          renderOpInicio();
+        }
       }
       // outras telas seguem com dados in-memory; ao trocar de aba, vão pegar atualizado
     } catch(e) { console.error('Erro re-renderizando após Realtime:', e); }
@@ -15789,6 +15794,13 @@ function finalizarE(){
   _ultimoReg = Date.now();
 
   // ─── FASE 4 SUB-1: também grava no banco (com fallback offline) ───
+  // Converte eResps de {p.id → valor} para {var_cod → valor} antes de gravar no banco
+  const _respostasVarCod = {};
+  (ePesquisa?.perguntas || []).forEach(p => {
+    const chave = p.var_cod ? String(p.var_cod) : p.id;
+    if (eResps[p.id] !== undefined) _respostasVarCod[chave] = eResps[p.id];
+  });
+
   // Demografia → campos próprios. Campos que o operador não coleta hoje
   // (idade numérica, renda) ficam null. "celular" não existe na tabela —
   // vai pra outras_dimensoes como JSON.
@@ -15808,7 +15820,7 @@ function finalizarE(){
     renda: null,
     regiao: demo.regiao || null,
     outras_dimensoes: { celular: !!demo.celular },
-    respostas: {...eResps},
+    respostas: _respostasVarCod,
     dh: new Date(agora).toISOString()
   };
   (async () => {
