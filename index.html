@@ -173,7 +173,7 @@ textarea{resize:vertical}
 .opt{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1.5px solid #3a4560;border-radius:10px;cursor:pointer;background:#2e3850;font-size:14px;color:#f0f2f8;transition:border-color .15s}
 .opt:hover{border-color:#FF4D00}
 .opt.sel{border-color:#FF4D00;background:rgba(255,77,0,.15)}
-.opt input[type=radio]{width:16px;height:16px;accent-color:#FF4D00;flex-shrink:0}
+.opt input[type=radio],.opt input[type=checkbox]{width:16px;height:16px;accent-color:#FF4D00;flex-shrink:0}
 .esc-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:6px}
 .esc-btn{padding:13px 4px;border:1.5px solid #3a4560;border-radius:10px;cursor:pointer;font-size:15px;font-weight:800;text-align:center;background:#2e3850;font-family:inherit;transition:all .15s}
 .esc-btn:hover{background:#374361}
@@ -12599,7 +12599,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .opt{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1.5px solid #3a4560;border-radius:10px;cursor:pointer;background:#2e3850;font-size:14px;color:#e8eaf0;transition:border-color .15s}
 .opt:hover{border-color:#FF4D00}
 .opt.sel{border-color:#FF4D00;background:rgba(255,77,0,.1)}
-.opt input[type=radio]{width:16px;height:16px;accent-color:#FF4D00;flex-shrink:0}
+.opt input[type=radio],.opt input[type=checkbox]{width:16px;height:16px;accent-color:#FF4D00;flex-shrink:0}
 .esc-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:6px}
 .esc-btn{padding:13px 4px;border:1.5px solid #3a4560;border-radius:10px;cursor:pointer;font-size:15px;font-weight:800;text-align:center;background:#2e3850;color:#e8eaf0;font-family:inherit;transition:all .15s}
 .esc-btn:hover{background:#374361}
@@ -12816,6 +12816,9 @@ function renderPerg(){
     const opts=optsDoTipo(p);
     if(opts.length===0){
       opc=\`<textarea id="aberta_\${p.id}" rows="3" style="width:100%;padding:10px 12px;border:1.5px solid #3a4560;border-radius:10px;font-size:14px;font-family:inherit;resize:vertical;background:#2e3850;color:#e8eaf0" placeholder="Digite a resposta..." onchange="eResps['\${p.id}']=this.value">\${val||''}</textarea>\`;
+    } else if(p.tipo==='multipla') {
+      const sel = Array.isArray(val) ? val : [];
+      opc=\`<div class="opts">\${opts.map((o,i)=>\`<label class="opt \${sel.includes(o)?'sel':''}"><input type="checkbox" name="p\${p.id}" value="\${o.replace(/"/g,'&quot;')}" \${sel.includes(o)?'checked':''} onchange="selMultiAdmin('\${p.id}','\${o.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}',this.checked);renderPerg()"><span style="font-size:12px;color:#636d88;min-width:22px;flex-shrink:0">\${i+1}.</span><span>\${o}</span></label>\`).join('')}</div>\`;
     } else {
       opc=\`<div class="opts">\${opts.map((o,i)=>\`<label class="opt \${val===o?'sel':''}"><input type="radio" name="p\${p.id}" value="\${o.replace(/"/g,'&quot;')}" \${val===o?'checked':''} onchange="eResps['\${p.id}']=this.value;renderPerg()"><span style="font-size:12px;color:#636d88;min-width:22px;flex-shrink:0">\${i+1}.</span><span>\${o}</span></label>\`).join('')}</div>\`;
     }
@@ -12845,6 +12848,13 @@ function renderPerg(){
     </div>\`;
 }
 function selE(pid,v){eResps[pid]=v;renderPerg();}
+function selMultiAdmin(pid,v,checked){
+  let arr = Array.isArray(eResps[pid]) ? [...eResps[pid]] : [];
+  if(checked){ if(!arr.includes(v)) arr.push(v); }
+  else { arr = arr.filter(x=>x!==v); }
+  eResps[pid] = arr;
+}
+function temResposta(p){const v=eResps[p.id];if(p.tipo==='aberta'||p.tipo==='idade_aberta')return v&&String(v).trim().length>0;if(p.tipo==='multipla')return Array.isArray(v)&&v.length>0;return v!=null&&v!==''&&v!==undefined;}
 function voltarP(){if(ePerg>0){ePerg--;renderPerg();}}
 function avancarP(){
   const pergs=ePesquisa.perguntas||[];const p=pergs[ePerg];
