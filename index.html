@@ -15629,6 +15629,7 @@ function optsDoTipo(p){
 function temRespostaOp(p){
   const v=eResps[p.id];
   if(p.tipo==='aberta') return v&&String(v).trim().length>0;
+  if(p.tipo==='multipla') return Array.isArray(v)&&v.length>0;
   return v!=null&&v!=='';
 }
 
@@ -15650,6 +15651,9 @@ function renderOpPerg() {
     const opts=optsDoTipo(p);
     if(opts.length===0){
       opc=`<textarea id="aberta_${p.id}" rows="3" style="width:100%;padding:10px 12px;border:1.5px solid #3a4560;border-radius:10px;font-size:14px;font-family:inherit;resize:vertical" placeholder="Digite a resposta..." onchange="eResps['${p.id}']=this.value">${val||''}</textarea>`;
+    } else if(p.tipo==='multipla') {
+      const sel = Array.isArray(val) ? val : [];
+      opc=`<div class="opts">${opts.map((o,i)=>`<label class="opt ${sel.includes(o)?'sel':''}"><input type="checkbox" name="p${p.id}" value="${o.replace(/"/g,'&quot;')}" ${sel.includes(o)?'checked':''} onchange="selMulti('${p.id}','${o.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}',this.checked);renderOpPerg()"><span style="font-size:12px;color:#c4cad8;min-width:22px;flex-shrink:0">${i+1}.</span><span>${o}</span></label>`).join('')}</div>`;
     } else {
       opc=`<div class="opts">${opts.map((o,i)=>`<label class="opt ${val===o?'sel':''}"><input type="radio" name="p${p.id}" value="${o.replace(/"/g,'&quot;')}" ${val===o?'checked':''} onchange="eResps['${p.id}']=this.value;renderOpPerg()"><span style="font-size:12px;color:#c4cad8;min-width:22px;flex-shrink:0">${i+1}.</span><span>${o}</span></label>`).join('')}</div>`;
     }
@@ -15682,6 +15686,12 @@ function renderOpPerg() {
 }
 
 function selE(pid,v){eResps[pid]=v;renderOpPerg();}
+function selMulti(pid,v,checked){
+  let arr = Array.isArray(eResps[pid]) ? [...eResps[pid]] : [];
+  if(checked){ if(!arr.includes(v)) arr.push(v); }
+  else { arr = arr.filter(x=>x!==v); }
+  eResps[pid] = arr;
+}
 function voltarP(){if(ePergIdx>0){ePergIdx--;renderOpPerg();}}
 function avancarP(){
   const pergs=ePesquisa.perguntas||[];
