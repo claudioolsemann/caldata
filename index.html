@@ -2341,15 +2341,18 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     },
 
     // ─── 4. listar ───
-    // params: { busca?, limite?, offset?, ddd?, motivo? }
-    async listar({ busca = '', limite = 50, offset = 0, ddd = '', motivo = '' } = {}) {
+    // params: { busca?, limite?, offset?, ddd?, motivo?, tipo?, data_de?, data_ate? }
+    async listar({ busca = '', limite = 50, offset = 0, ddd = '', motivo = '', tipo = '', data_de = '', data_ate = '' } = {}) {
       try {
         const { data, error } = await supabaseClient.rpc('listar_blacklist', {
-          p_busca:  busca  || null,
-          p_limite: limite,
-          p_offset: offset,
-          p_ddd:    ddd    || null,
-          p_motivo: motivo || null
+          p_busca:    busca    || null,
+          p_limite:   limite,
+          p_offset:   offset,
+          p_ddd:      ddd      || null,
+          p_motivo:   motivo   || null,
+          p_tipo:     tipo     || null,
+          p_data_de:  data_de  || null,
+          p_data_ate: data_ate || null
         });
         if (error) return { ok: false, error: error.message };
         const linhas = data || [];
@@ -12036,6 +12039,9 @@ async function abrirBlacklist() {
     busca: '',
     ddd: '',
     motivo: '',
+    tipo: '',
+    data_de: '',
+    data_ate: '',
     pagina: 0,
     porPagina: 50,
     total: 0,
@@ -12071,7 +12077,14 @@ async function abrirBlacklist() {
         <!-- Filtros avançados -->
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
           <input id="bl-filtro-ddd" type="text" placeholder="DDD (ex: 41)" maxlength="2" style="width:90px;padding:6px 10px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onkeyup="if(event.key==='Enter')_blBuscar()">
-          <input id="bl-filtro-motivo" type="text" placeholder="Filtrar por motivo..." style="flex:1;min-width:160px;padding:6px 10px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onkeyup="if(event.key==='Enter')_blBuscar()">
+          <select id="bl-filtro-tipo" style="padding:6px 10px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onchange="_blBuscar()">
+            <option value="">📱☎ Todos</option>
+            <option value="celular">📱 Celular</option>
+            <option value="fixo">☎ Fixo</option>
+          </select>
+          <input id="bl-filtro-motivo" type="text" placeholder="Filtrar por motivo..." style="flex:1;min-width:140px;padding:6px 10px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onkeyup="if(event.key==='Enter')_blBuscar()">
+          <input id="bl-filtro-data-de" type="date" title="Incluído a partir de" style="padding:6px 10px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onchange="_blBuscar()">
+          <input id="bl-filtro-data-ate" type="date" title="Incluído até" style="padding:6px 10px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onchange="_blBuscar()">
           <button class="btn btn-sm" style="color:#8b95aa;border-color:#3a4560" onclick="_blLimparFiltros()">✕ Limpar filtros</button>
         </div>
 
@@ -12122,11 +12135,14 @@ async function _blCarregar() {
   // Lista paginada
   const st = window._blState;
   const r = await window.blacklistSb.listar({
-    busca:  st.busca,
-    limite: st.porPagina,
-    offset: st.pagina * st.porPagina,
-    ddd:    st.ddd    || '',
-    motivo: st.motivo || ''
+    busca:    st.busca,
+    limite:   st.porPagina,
+    offset:   st.pagina * st.porPagina,
+    ddd:      st.ddd      || '',
+    motivo:   st.motivo   || '',
+    tipo:     st.tipo     || '',
+    data_de:  st.data_de  || '',
+    data_ate: st.data_ate || ''
   });
 
   if (!r.ok) {
@@ -12187,9 +12203,12 @@ async function _blCarregar() {
     pag.innerHTML = `
       <span>${st.linhas.length} de ${st.total.toLocaleString()} ${(() => {
         const tags = [];
-        if (st.busca)  tags.push(`número: "${st.busca}"`);
-        if (st.ddd)    tags.push(`DDD: ${st.ddd}`);
-        if (st.motivo) tags.push(`motivo: "${st.motivo}"`);
+        if (st.busca)    tags.push(`número: "${st.busca}"`);
+        if (st.ddd)      tags.push(`DDD: ${st.ddd}`);
+        if (st.tipo)     tags.push(st.tipo === 'celular' ? '📱 celular' : '☎ fixo');
+        if (st.motivo)   tags.push(`motivo: "${st.motivo}"`);
+        if (st.data_de)  tags.push(`de: ${st.data_de}`);
+        if (st.data_ate) tags.push(`até: ${st.data_ate}`);
         return tags.length ? `(${tags.join(' · ')})` : 'registros';
       })()}</span>
       <div style="display:flex;gap:6px;align-items:center">
@@ -12202,24 +12221,30 @@ async function _blCarregar() {
 }
 
 function _blBuscar() {
-  window._blState.busca  = (document.getElementById('bl-busca')?.value || '').trim();
-  window._blState.ddd    = (document.getElementById('bl-filtro-ddd')?.value || '').replace(/\D/g,'').slice(0,2);
-  window._blState.motivo = (document.getElementById('bl-filtro-motivo')?.value || '').trim();
+  window._blState.busca    = (document.getElementById('bl-busca')?.value || '').trim();
+  window._blState.ddd      = (document.getElementById('bl-filtro-ddd')?.value || '').replace(/\D/g,'').slice(0,2);
+  window._blState.motivo   = (document.getElementById('bl-filtro-motivo')?.value || '').trim();
+  window._blState.tipo     = (document.getElementById('bl-filtro-tipo')?.value || '');
+  window._blState.data_de  = (document.getElementById('bl-filtro-data-de')?.value || '');
+  window._blState.data_ate = (document.getElementById('bl-filtro-data-ate')?.value || '');
   window._blState.pagina = 0;
   _blCarregar();
 }
 
 function _blLimparFiltros() {
-  const ddd    = document.getElementById('bl-filtro-ddd');
-  const motivo = document.getElementById('bl-filtro-motivo');
-  const busca  = document.getElementById('bl-busca');
-  if (ddd)    ddd.value    = '';
-  if (motivo) motivo.value = '';
-  if (busca)  busca.value  = '';
-  window._blState.busca  = '';
-  window._blState.ddd    = '';
-  window._blState.motivo = '';
-  window._blState.pagina = 0;
+  ['bl-filtro-ddd','bl-filtro-motivo','bl-filtro-data-de','bl-filtro-data-ate','bl-busca'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const tipo = document.getElementById('bl-filtro-tipo');
+  if (tipo) tipo.value = '';
+  window._blState.busca    = '';
+  window._blState.ddd      = '';
+  window._blState.motivo   = '';
+  window._blState.tipo     = '';
+  window._blState.data_de  = '';
+  window._blState.data_ate = '';
+  window._blState.pagina   = 0;
   _blCarregar();
 }
 
@@ -12417,7 +12442,15 @@ async function _blExportarCSV() {
   let offset = 0;
   const LIM = 1000;
   while (true) {
-    const r = await window.blacklistSb.listar({ busca: window._blState.busca, limite: LIM, offset });
+    const r = await window.blacklistSb.listar({
+      busca:    window._blState.busca,
+      ddd:      window._blState.ddd      || '',
+      motivo:   window._blState.motivo   || '',
+      tipo:     window._blState.tipo     || '',
+      data_de:  window._blState.data_de  || '',
+      data_ate: window._blState.data_ate || '',
+      limite: LIM, offset
+    });
     if (!r.ok) { alert('Erro ao exportar: ' + r.error); return; }
     TUDO.push(...r.data.linhas);
     if (r.data.linhas.length < LIM) break;
