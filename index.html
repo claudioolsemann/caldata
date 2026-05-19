@@ -2341,13 +2341,15 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     },
 
     // ─── 4. listar ───
-    // params: { busca?, limite?, offset? }
-    async listar({ busca = '', limite = 50, offset = 0 } = {}) {
+    // params: { busca?, limite?, offset?, ddd?, motivo? }
+    async listar({ busca = '', limite = 50, offset = 0, ddd = '', motivo = '' } = {}) {
       try {
         const { data, error } = await supabaseClient.rpc('listar_blacklist', {
-          p_busca: busca || null,
+          p_busca:  busca  || null,
           p_limite: limite,
-          p_offset: offset
+          p_offset: offset,
+          p_ddd:    ddd    || null,
+          p_motivo: motivo || null
         });
         if (error) return { ok: false, error: error.message };
         const linhas = data || [];
@@ -12030,6 +12032,8 @@ async function abrirBlacklist() {
   // Estado do painel
   window._blState = {
     busca: '',
+    ddd: '',
+    motivo: '',
     pagina: 0,
     porPagina: 50,
     total: 0,
@@ -12051,7 +12055,7 @@ async function abrirBlacklist() {
         </div>
 
         <!-- Barra de ações -->
-        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
           <input id="bl-busca" type="text" placeholder="🔍 Buscar por número..." style="flex:1;min-width:200px;padding:8px 12px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onkeyup="if(event.key==='Enter')_blBuscar()">
           <button class="btn btn-sm" onclick="_blBuscar()">Buscar</button>
           <button class="btn btn-sm" style="color:#2dc98e;border-color:#1d9e75" onclick="_blAbrirFormAdd()">➕ Adicionar</button>
@@ -12060,6 +12064,13 @@ async function abrirBlacklist() {
             <input type="file" id="bl-imp-file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="_blImportar(this)">
           </label>
           <button class="btn btn-sm" style="color:#f0b840;border-color:#8a6a1f" onclick="_blExportarCSV()">📥 CSV</button>
+        </div>
+
+        <!-- Filtros avançados -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+          <input id="bl-filtro-ddd" type="text" placeholder="DDD (ex: 41)" maxlength="2" style="width:90px;padding:6px 10px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onkeyup="if(event.key==='Enter')_blBuscar()">
+          <input id="bl-filtro-motivo" type="text" placeholder="Filtrar por motivo..." style="flex:1;min-width:160px;padding:6px 10px;background:#2e3850;border:1.5px solid #3a4560;border-radius:8px;color:#f0f2f8;font-size:13px" onkeyup="if(event.key==='Enter')_blBuscar()">
+          <button class="btn btn-sm" style="color:#8b95aa;border-color:#3a4560" onclick="_blLimparFiltros()">✕ Limpar filtros</button>
         </div>
 
         <!-- Área principal: tabela com paginação -->
@@ -12109,9 +12120,11 @@ async function _blCarregar() {
   // Lista paginada
   const st = window._blState;
   const r = await window.blacklistSb.listar({
-    busca: st.busca,
+    busca:  st.busca,
     limite: st.porPagina,
-    offset: st.pagina * st.porPagina
+    offset: st.pagina * st.porPagina,
+    ddd:    st.ddd    || '',
+    motivo: st.motivo || ''
   });
 
   if (!r.ok) {
@@ -12170,7 +12183,13 @@ async function _blCarregar() {
   const pagAtual = st.pagina + 1;
   if (pag) {
     pag.innerHTML = `
-      <span>${st.linhas.length} de ${st.total.toLocaleString()} ${st.busca ? `(busca "${st.busca}")` : 'registros'}</span>
+      <span>${st.linhas.length} de ${st.total.toLocaleString()} ${(() => {
+        const tags = [];
+        if (st.busca)  tags.push(`número: "${st.busca}"`);
+        if (st.ddd)    tags.push(`DDD: ${st.ddd}`);
+        if (st.motivo) tags.push(`motivo: "${st.motivo}"`);
+        return tags.length ? `(${tags.join(' · ')})` : 'registros';
+      })()}</span>
       <div style="display:flex;gap:6px;align-items:center">
         <button class="btn btn-sm" ${st.pagina<=0?'disabled':''} onclick="_blMudarPagina(-1)">←</button>
         <span style="padding:0 8px">Página ${pagAtual} de ${totalPaginas}</span>
@@ -12181,8 +12200,23 @@ async function _blCarregar() {
 }
 
 function _blBuscar() {
-  const inp = document.getElementById('bl-busca');
-  window._blState.busca = (inp?.value || '').trim();
+  window._blState.busca  = (document.getElementById('bl-busca')?.value || '').trim();
+  window._blState.ddd    = (document.getElementById('bl-filtro-ddd')?.value || '').replace(/\D/g,'').slice(0,2);
+  window._blState.motivo = (document.getElementById('bl-filtro-motivo')?.value || '').trim();
+  window._blState.pagina = 0;
+  _blCarregar();
+}
+
+function _blLimparFiltros() {
+  const ddd    = document.getElementById('bl-filtro-ddd');
+  const motivo = document.getElementById('bl-filtro-motivo');
+  const busca  = document.getElementById('bl-busca');
+  if (ddd)    ddd.value    = '';
+  if (motivo) motivo.value = '';
+  if (busca)  busca.value  = '';
+  window._blState.busca  = '';
+  window._blState.ddd    = '';
+  window._blState.motivo = '';
   window._blState.pagina = 0;
   _blCarregar();
 }
