@@ -10546,6 +10546,8 @@ function pgResultados() {
     </div>
     <div id="res-graficos"></div>`;
   _resCarregarFiltros();
+  // Busca do banco automaticamente ao abrir — dados atualizados em qualquer máquina
+  _resBuscarDoBanco();
 }
 
 // Carrega filtros dinâmicos a partir dos dados reais da pesquisa selecionada
@@ -14145,8 +14147,10 @@ function exportProducaoCSV() {
 function getExpRegs() {
   const qid  = document.getElementById('exp-q')?.value;
   const tipo = document.getElementById('exp-tipo')?.value;
+  const opid = document.getElementById('prod-op')?.value;
   let r = [...DB.registros];
   if (qid)  r = r.filter(x=>x.pesquisa_id==qid);
+  if (opid) r = r.filter(x=>x.op_id==opid);
   if (tipo==='validas')       r = r.filter(x=>x.status===1);
   if (tipo==='somente_reais') r = r.filter(x=>x.status===1 && !x.origem);
   if (tipo==='somente_pond')  r = r.filter(x=>x.status===1 && x.origem==='ponderacao');
