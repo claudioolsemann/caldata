@@ -2495,6 +2495,18 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       } catch(e) { return { ok:false, error: e.message }; }
     },
 
+    // ─── 8b. statusModal ───  (B6: admin vê status detalhado de 1 operador+pesquisa)
+    async statusModal({ operadorId, pesquisaId } = {}) {
+      try {
+        const { data, error } = await supabaseClient.rpc('status_localidades_operador_modal', {
+          p_operador_id: operadorId,
+          p_pesquisa_id: pesquisaId
+        });
+        if (error) return { ok:false, error: error.message };
+        return { ok:true, data: data || [] };
+      } catch(e) { return { ok:false, error: e.message }; }
+    },
+
     // ─── 9. refreshCache ───  (atualiza MV após importar base)
     async refreshCache() {
       try {
@@ -18697,6 +18709,12 @@ window.abrirLocalidadesOp = async function(opId) {
   const pesquisaIdBanco = parseInt(q.banco_id);
   const operadorIdBanco = parseInt(op.banco_id || op.id);
 
+  // ─── B6: limpa interval anterior se existir (defesa contra modal duplo) ───
+  if (window._b6StatusInterval) {
+    clearInterval(window._b6StatusInterval);
+    window._b6StatusInterval = null;
+  }
+
   // Render do modal (estado inicial: spinner)
   let modal = document.getElementById('modal-localidades-op');
   if (modal) modal.remove();
@@ -18704,22 +18722,23 @@ window.abrirLocalidadesOp = async function(opId) {
   modal.id = 'modal-localidades-op';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
   modal.innerHTML = `
-    <div style="background:#252e44;border:1.5px solid #3a4560;border-radius:14px;padding:20px;max-width:720px;width:100%;max-height:88vh;overflow:auto;color:#e8eaf0;font-family:inherit">
+    <div style="background:#252e44;border:1.5px solid #3a4560;border-radius:14px;padding:20px;max-width:820px;width:100%;max-height:88vh;overflow:auto;color:#e8eaf0;font-family:inherit">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;border-bottom:1px solid #3a4560;padding-bottom:10px">
         <div>
           <div style="font-size:16px;font-weight:800">🏙 Localidades — ${_escHtmlICR(op.nome)}</div>
           <div style="font-size:12px;color:#8b95aa;margin-top:2px">Pesquisa: ${_escHtmlICR(q.nome || ('#'+q.id))}</div>
         </div>
-        <button class="btn btn-sm" onclick="document.getElementById('modal-localidades-op').remove()">✕</button>
+        <button class="btn btn-sm" onclick="_b6FecharModal()">✕</button>
       </div>
       <div id="loc-modal-body" style="padding:20px;text-align:center;color:#c4cad8">⏳ Carregando cidades disponíveis…</div>
     </div>`;
   document.body.appendChild(modal);
 
-  // Carrega: (1) cidades disponíveis na pesquisa, (2) localidades já atribuídas
-  const [cidsR, atribR] = await Promise.all([
+  // Carrega: (1) cidades disponíveis na pesquisa, (2) localidades já atribuídas, (3) status detalhado
+  const [cidsR, atribR, statusR] = await Promise.all([
     window.localidadesSb.cidadesDisponiveis(pesquisaIdBanco),
-    window.localidadesSb.listarPorOperador({ operadorId: operadorIdBanco, pesquisaId: pesquisaIdBanco })
+    window.localidadesSb.listarPorOperador({ operadorId: operadorIdBanco, pesquisaId: pesquisaIdBanco }),
+    window.localidadesSb.statusModal({ operadorId: operadorIdBanco, pesquisaId: pesquisaIdBanco })
   ]);
 
   if (!cidsR.ok) {
@@ -18743,6 +18762,10 @@ window.abrirLocalidadesOp = async function(opId) {
     return;
   }
 
+  // ─── B6: monta seção de STATUS (cidades atribuídas com números) ───
+  const statusArr = (statusR.ok ? statusR.data : []) || [];
+  const statusHtml = _b6RenderStatus(statusArr);
+
   const linhas = cidades.map(c => {
     const checked = atribuidasSet.has(c.cidade) ? 'checked' : '';
     const cidLabel = _escHtmlICR(c.cidade_rotulo);
@@ -18755,6 +18778,12 @@ window.abrirLocalidadesOp = async function(opId) {
   }).join('');
 
   document.getElementById('loc-modal-body').innerHTML = `
+    <!-- B6: Seção de STATUS (atualiza a cada 15s) -->
+    <div id="b6-status-section">
+      ${statusHtml}
+    </div>
+
+    <!-- Seção de EDIÇÃO -->
     <div style="background:rgba(55,138,221,.1);border:1px solid rgba(55,138,221,.3);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#7ec3f0;line-height:1.5">
       <div style="font-weight:700;margin-bottom:4px">Como funciona</div>
       <div>1. Marque as cidades em que esse operador pode trabalhar</div>
@@ -18770,18 +18799,96 @@ window.abrirLocalidadesOp = async function(opId) {
       </div>
     </div>
 
-    <div id="loc-lista" style="background:#1d2638;border-radius:8px;border:1px solid #3a4560;overflow:hidden;margin-bottom:14px;max-height:340px;overflow-y:auto">
+    <div id="loc-lista" style="background:#1d2638;border-radius:8px;border:1px solid #3a4560;overflow:hidden;margin-bottom:14px;max-height:280px;overflow-y:auto">
       ${linhas}
     </div>
 
     <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-sm" onclick="document.getElementById('modal-localidades-op').remove()">Cancelar</button>
+      <button class="btn btn-sm" onclick="_b6FecharModal()">Cancelar</button>
       <button class="btn btn-sm" style="background:#2dc98e;border-color:#2dc98e;color:#fff"
               onclick="_locOpSalvar('${operadorIdBanco}','${pesquisaIdBanco}')">
         💾 Salvar atribuições
       </button>
     </div>
   `;
+
+  // ─── B6: agenda refresh do status a cada 15s ───
+  window._b6StatusInterval = setInterval(async () => {
+    // Se modal foi fechado, para o polling
+    if (!document.getElementById('modal-localidades-op')) {
+      clearInterval(window._b6StatusInterval);
+      window._b6StatusInterval = null;
+      return;
+    }
+    const r = await window.localidadesSb.statusModal({ operadorId: operadorIdBanco, pesquisaId: pesquisaIdBanco });
+    if (!r.ok) return; // erro silencioso, mantém último estado
+    const sec = document.getElementById('b6-status-section');
+    if (sec) sec.innerHTML = _b6RenderStatus(r.data || []);
+  }, 15000);
+};
+
+// ─── B6: helper que renderiza a seção de status (chamado a cada 15s) ───
+window._b6RenderStatus = function(statusArr) {
+  if (!statusArr || statusArr.length === 0) {
+    return `<div style="background:rgba(139,149,170,.1);border:1px solid rgba(139,149,170,.3);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#8b95aa;line-height:1.5">
+      <div style="font-weight:700;margin-bottom:2px">📊 Status atual</div>
+      <div>Sem localidades atribuídas ainda. Marque cidades abaixo e salve.</div>
+    </div>`;
+  }
+  const temCota = statusArr.some(s => s.cota_meta !== null && s.cota_meta !== undefined);
+  const linhas = statusArr.map(s => {
+    const nome = _escHtmlICR(s.cidade_rotulo || s.cidade || '—');
+    const total = Number(s.total_tels || 0).toLocaleString('pt-BR');
+    const disp = Number(s.tels_disp || 0).toLocaleString('pt-BR');
+    const validas = Number(s.validas || 0);
+    let cotaCell;
+    if (s.cota_meta != null && s.cota_pct != null) {
+      const pct = Number(s.cota_pct);
+      const cor = pct >= 100 ? '#2dc98e' : (pct >= 50 ? '#f0b840' : '#7ec3f0');
+      cotaCell = `<span style="color:${cor};font-weight:700">${Number(s.cota_feitas||0)}/${s.cota_meta}</span> <span style="color:#8b95aa;font-size:11px">(${pct.toFixed(1)}%)</span>`;
+    } else {
+      cotaCell = `<span style="color:#8b95aa;font-style:italic" title="Pesquisa não tem cota por região">—</span>`;
+    }
+    return `<tr style="border-top:1px solid #2e3850">
+      <td style="padding:8px 10px;font-size:13px;color:#e8eaf0;font-weight:600">${nome}</td>
+      <td style="padding:8px 10px;font-size:12px;color:#c4cad8;text-align:right">${total}</td>
+      <td style="padding:8px 10px;font-size:12px;color:#c4cad8;text-align:right">${disp}</td>
+      <td style="padding:8px 10px;font-size:12px;color:#e8eaf0;text-align:right;font-weight:700">${validas}</td>
+      <td style="padding:8px 10px;font-size:12px;text-align:right">${cotaCell}</td>
+    </tr>`;
+  }).join('');
+  return `<div style="background:#1d2638;border:1px solid #3a4560;border-radius:8px;margin-bottom:14px;overflow:hidden">
+    <div style="padding:10px 12px;border-bottom:1px solid #3a4560;display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:12px;font-weight:700;color:#e8eaf0">📊 Status das localidades atribuídas</div>
+      <div style="font-size:10px;color:#8b95aa;display:flex;align-items:center;gap:5px">
+        <span style="width:6px;height:6px;border-radius:50%;background:#1D9E75;animation:pulse 2s infinite"></span>
+        atualiza a cada 15s
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:#252e44">
+        <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:left">Cidade</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:right">Total tels</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:right">Disp.</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:right">Válidas (operador)</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:right">${temCota ? 'Cota região' : 'Cota'}</th>
+      </tr></thead>
+      <tbody>${linhas}</tbody>
+    </table>
+    ${!temCota ? `<div style="padding:8px 12px;background:rgba(139,149,170,.05);font-size:11px;color:#8b95aa;border-top:1px solid #2e3850">
+      ℹ Esta pesquisa não tem cota por região cadastrada — coluna "Cota" mostra "—".
+    </div>` : ''}
+  </div>`;
+};
+
+// ─── B6: fecha modal + limpa interval (evita memory leak) ───
+window._b6FecharModal = function() {
+  if (window._b6StatusInterval) {
+    clearInterval(window._b6StatusInterval);
+    window._b6StatusInterval = null;
+  }
+  const m = document.getElementById('modal-localidades-op');
+  if (m) m.remove();
 };
 
 // Helper: marca/desmarca todos os checkboxes do modal
@@ -18816,7 +18923,12 @@ window._locOpSalvar = async function(operadorIdBanco, pesquisaIdBanco) {
       return;
     }
     toast(`✓ ${localidades.length} localidade(s) atribuída(s)`);
-    document.getElementById('modal-localidades-op').remove();
+    // B6: usa helper que limpa o interval do polling
+    if (typeof window._b6FecharModal === 'function') {
+      window._b6FecharModal();
+    } else {
+      document.getElementById('modal-localidades-op').remove();
+    }
     // Re-renderiza a grade pra atualizar contagem
     if (typeof _renderPgOperadores === 'function') _renderPgOperadores();
   } catch (e) {
