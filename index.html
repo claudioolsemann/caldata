@@ -10634,10 +10634,39 @@ function gerarCruzPxPerfil() {
     { lbl:'FAIXA ETÁRIA',      k:'faixa_etaria', cols:['16 A 24 ANOS','25 A 34 ANOS','35 A 54 ANOS','55 ANOS OU MAIS'] },
     { lbl:'GRAU DE INSTRUÇÃO', k:'escolaridade', cols:['ATÉ FUNDAMENTAL','ENSINO MÉDIO','SUPERIOR'] },
   ];
-  getDimsQ(q).forEach(d=>{
-    if (q.cotas?.[d.k]?.ativa && !CRUZ_PERFIL.find(c=>c.k===d.k))
-      CRUZ_PERFIL.push({ lbl:d.lbl.toUpperCase(), k:d.k, cols:d.itens });
-  });
+
+  // Para pesquisas cruzadas: usa as dimensões reais da matriz 4D
+  if (q.tipoCota === 'cruzado' && Array.isArray(q.dims) && q.dims.length > 0) {
+    CRUZ_PERFIL.length = 0; // limpa defaults — usa só as dims reais
+    q.dims.forEach(d => {
+      if (!d || !d.k || !d.cats || !d.cats.length) return;
+      if (!CRUZ_PERFIL.find(c => c.k === d.k)) {
+        CRUZ_PERFIL.push({ lbl: (d.lbl || d.k).toUpperCase(), k: d.k, cols: d.cats });
+      }
+    });
+    // Fallback: se dims não tem cats, tenta extrair da matriz4D
+    if (!CRUZ_PERFIL.length && Array.isArray(q.matriz4D) && q.matriz4D.length > 0) {
+      const sexos = [...new Set(q.matriz4D.map(c=>c.sexo).filter(Boolean))];
+      const idades = [...new Set(q.matriz4D.map(c=>c.idade).filter(Boolean))];
+      const instrs = [...new Set(q.matriz4D.map(c=>c.instrucao).filter(Boolean))];
+      const locs   = [...new Set(q.matriz4D.map(c=>c.loc).filter(Boolean))];
+      if (locs.length > 1)   CRUZ_PERFIL.push({ lbl:'LOCALIZAÇÃO', k:'regiao', cols:locs });
+      if (sexos.length)  CRUZ_PERFIL.push({ lbl:'SEXO', k:'sexo', cols:sexos });
+      if (idades.length) CRUZ_PERFIL.push({ lbl:'FAIXA ETÁRIA', k:'faixa_etaria', cols:idades });
+      if (instrs.length) CRUZ_PERFIL.push({ lbl:'INSTRUÇÃO', k:'escolaridade', cols:instrs });
+    }
+  } else {
+    // Pesquisas marginais: adiciona dims ativas das cotas
+    getDimsQ(q).forEach(d => {
+      if (q.cotas?.[d.k]?.ativa && !CRUZ_PERFIL.find(c => c.k === d.k))
+        CRUZ_PERFIL.push({ lbl:d.lbl.toUpperCase(), k:d.k, cols:d.itens });
+    });
+  }
+
+  // Aplica filtro geográfico do relatório
+  const _pExpRel = getPeriodoFiltro('rel');
+  regs = filtrarPorPeriodo(regs, _pExpRel.dtIni, _pExpRel.dtFim, _pExpRel.hrIni, _pExpRel.hrFim);
+  regs = _relFiltrarGeo(regs);
 
   const ESCL = {1:'ÓTIMA',2:'BOA',3:'REGULAR',4:'RUIM',5:'PÉSSIMA',6:'NÃO SABE',7:'NÃO RESPONDEU'};
   const opts = getOptsUsadas(regs, pPerf);
