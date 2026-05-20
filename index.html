@@ -14798,7 +14798,7 @@ function expPDF() {
   doc.text('Gerado em ' + agora + ' · ' + regs.length + ' registros', 14, 20);
   doc.setTextColor(0);
 
-  const head = [['#', 'Data/Hora', 'Operador', 'Pesquisa', 'Status', 'Sexo', 'Faixa Etária', 'Instrução', 'Localidade', 'Duração', 'Tipo']];
+  const head = [['#', 'Data/Hora', 'Operador', 'Pesquisa', 'Status', 'Sexo', 'Faixa Etária', 'Instrução', 'Duração', 'Tipo']];
   const body = regs.map((r, i) => [
     i + 1,
     r.dh ? new Date(r.dh).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '',
@@ -14808,7 +14808,6 @@ function expPDF() {
     r.sexo || '',
     r.faixa_etaria || '',
     r.escolaridade || '',
-    r.regiao || '',
     r.duracao_seg ? Math.floor(r.duracao_seg/60) + ':' + String(r.duracao_seg%60).padStart(2,'0') : '',
     r.origem === 'ponderacao' ? 'Pond.' : 'Real'
   ]);
@@ -14817,21 +14816,21 @@ function expPDF() {
     startY: 24,
     head,
     body,
-    styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak' },
+    styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: [30, 36, 54], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [245, 246, 250] },
+    tableWidth: 'auto',
     columnStyles: {
-      0:  { cellWidth: 7 },
-      1:  { cellWidth: 30 },
-      2:  { cellWidth: 26 },
-      3:  { cellWidth: 30 },
-      4:  { cellWidth: 20 },
-      5:  { cellWidth: 20 },
-      6:  { cellWidth: 22 },
-      7:  { cellWidth: 20 },
-      8:  { cellWidth: 18 },
-      9:  { cellWidth: 12 },
-      10: { cellWidth: 12 }
+      0: { cellWidth: 8 },
+      1: { cellWidth: 36 },
+      2: { cellWidth: 30 },
+      3: { cellWidth: 38 },
+      4: { cellWidth: 28 },
+      5: { cellWidth: 22 },
+      6: { cellWidth: 30 },
+      7: { cellWidth: 32 },
+      8: { cellWidth: 16 },
+      9: { cellWidth: 14 }
     },
     didDrawPage: function(data) {
       doc.setFontSize(7);
