@@ -9674,6 +9674,7 @@ function pgRelatorio() {
     </div>
     <div id="rel-config-pergs"></div>
     <div id="rel-cruz-section"></div>`;
+  renderRelFiltroGeo();
   renderRelConfig();
   renderCruzSection();
 }
@@ -9824,36 +9825,52 @@ function salvarConfigRel() {
 }
 
 // ─── Preenche selects de localidade/bairro no relatório ───
+// Só exibe os filtros quando a pesquisa tem registros com campo regiao preenchido.
+// Se não houver dados geográficos, a linha de filtro fica oculta.
 function renderRelFiltroGeo() {
-  const qid = document.getElementById('rel-q')?.value;
-  const q   = DB.pesquisas.find(x => x.id == qid);
+  const qid     = document.getElementById('rel-q')?.value;
   const locSel  = document.getElementById('rel-localidade');
   const baiSel  = document.getElementById('rel-bairro');
   const baiCol  = document.getElementById('rel-bairro-col');
-  if (!locSel) return;
+  const geoRow  = document.getElementById('rel-filtro-geo-row');
+  if (!locSel || !geoRow) return;
 
-  // Pega registros da pesquisa
-  const regs = DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1);
+  // Registros válidos da pesquisa (sem filtro geo para não criar dependência circular)
+  const tipo = document.getElementById('rel-tipo')?.value || 'ponderados';
+  const _pRel = getPeriodoFiltro('rel');
+  let regs = DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1);
+  if (tipo === 'reais') regs = regs.filter(r => r.origem !== 'ponderacao');
+  regs = filtrarPorPeriodo(regs, _pRel.dtIni, _pRel.dtFim, _pRel.hrIni, _pRel.hrFim);
 
-  // Extrai localidades únicas dos registros
+  // Localidades únicas
   const locs = [...new Set(regs.map(r => (r.regiao || '').trim()).filter(Boolean))].sort();
 
+  // Oculta linha inteira se não há dados geográficos
+  if (locs.length === 0) {
+    geoRow.style.display = 'none';
+    if (locSel) { locSel.value = ''; locSel.innerHTML = '<option value="">Todas as localidades</option>'; }
+    if (baiSel) { baiSel.value = ''; baiSel.innerHTML = '<option value="">Todos os bairros</option>'; }
+    if (baiCol) baiCol.style.display = 'none';
+    return;
+  }
+
+  geoRow.style.display = '';
   const locAtual = locSel.value;
   locSel.innerHTML = '<option value="">Todas as localidades</option>' +
-    locs.map(l => `<option value="${l}" ${l===locAtual?'selected':''}>${l}</option>`).join('');
+    locs.map(l => `<option value="${l}" ${l === locAtual ? 'selected' : ''}>${l}</option>`).join('');
 
-  // Se escolheu localidade, mostra bairros
+  // Bairros — só se escolheu uma localidade
   const locEscolhida = locSel.value;
   if (locEscolhida) {
     const bairros = [...new Set(
-      regs.filter(r => (r.regiao||'').trim() === locEscolhida)
+      regs.filter(r => (r.regiao || '').trim() === locEscolhida)
           .map(r => (r.bairro || r.outras_dimensoes?.bairro || '').trim())
           .filter(Boolean)
     )].sort();
     if (bairros.length > 0) {
       const baiAtual = baiSel?.value || '';
       baiSel.innerHTML = '<option value="">Todos os bairros</option>' +
-        bairros.map(b => `<option value="${b}" ${b===baiAtual?'selected':''}>${b}</option>`).join('');
+        bairros.map(b => `<option value="${b}" ${b === baiAtual ? 'selected' : ''}>${b}</option>`).join('');
       if (baiCol) baiCol.style.display = '';
     } else {
       if (baiCol) baiCol.style.display = 'none';
@@ -9889,8 +9906,7 @@ function renderRelConfig() {
   if (tipo==='reais') regs = regs.filter(r=>r.origem!=='ponderacao');
   const _pRel = getPeriodoFiltro('rel');
   regs = filtrarPorPeriodo(regs, _pRel.dtIni, _pRel.dtFim, _pRel.hrIni, _pRel.hrFim);
-  // ─── Filtro geográfico ───
-  renderRelFiltroGeo();
+  // ─── Filtro geográfico ─── aplicado APÓS popular o select
   regs = _relFiltrarGeo(regs);
   // Normalizar respostas de idade para faixas etárias padrão
   const _qAtual = DB.pesquisas.find(x=>x.id==qid);
