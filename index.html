@@ -5445,16 +5445,33 @@ function renderDash() {
 
       // Conta entrevistas por célula
       const celCount = {};
+      // Localidades únicas na matriz (para fallback quando regiao está vazio)
+      const locsNaMatriz = [...new Set(p.matriz4D.map(c => c.loc))];
       valP.forEach(r => {
         const regUp = String(r.regiao || '').toUpperCase().trim();
-        const locR  = mapRegLoc.get(regUp) || regUp;
-        const sexR  = String(r.sexo || '').toUpperCase().trim();
-        const idaR  = String(r.faixa_etaria || r.idade || '').toUpperCase().trim();
-        const insR  = String(r.escolaridade || r.instrucao || '').toUpperCase().trim();
-        const cel   = p.matriz4D.find(c =>
+        let locR = mapRegLoc.get(regUp) || regUp;
+        // Fallback: se locR vazio e há só 1 localização na matriz, usa ela
+        if (!locR && locsNaMatriz.length === 1) locR = locsNaMatriz[0];
+        const sexR = String(r.sexo || '').toUpperCase().trim();
+        const idaR = String(r.faixa_etaria || r.idade || '').toUpperCase().trim();
+        const insR = String(r.escolaridade || r.instrucao || '').toUpperCase().trim();
+        // Match completo
+        let cel = p.matriz4D.find(c =>
           _matchCota(locR, c.loc) && _matchCota(sexR, c.sexo) &&
           _matchCota(idaR, c.idade) && _matchCota(insR, c.instrucao)
         );
+        // Match parcial se instrucao vazia
+        if (!cel && !insR) {
+          cel = p.matriz4D.find(c =>
+            _matchCota(locR, c.loc) && _matchCota(sexR, c.sexo) && _matchCota(idaR, c.idade)
+          );
+        }
+        // Match só por sexo+idade se loc também vazia
+        if (!cel && !locR) {
+          cel = p.matriz4D.find(c =>
+            _matchCota(sexR, c.sexo) && _matchCota(idaR, c.idade)
+          );
+        }
         if (cel) {
           const key = `${cel.loc}|${cel.sexo}|${cel.idade}|${cel.instrucao}`;
           celCount[key] = (celCount[key] || 0) + 1;
@@ -5479,7 +5496,8 @@ function renderDash() {
       // Mostra até 2 localidades — o resto colapsa
       const locsVisiveis = locais.slice(0, 2);
       locsVisiveis.forEach(loc => {
-        const celsDaLoc = celComMeta.filter(c => c.loc === loc);
+        // Inclui células com meta > 0 OU que já têm entrevistas registradas
+      const celsDaLoc = p.matriz4D.filter(c => c.loc === loc && (c.meta > 0 || (celCount[`${c.loc}|${c.sexo}|${c.idade}|${c.instrucao}`] || 0) > 0));
         html += `<div style="margin-bottom:8px">
           <div style="font-size:11px;font-weight:700;color:#c4cad8;margin-bottom:4px">${loc}</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:3px">`;
