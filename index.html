@@ -3223,6 +3223,10 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       regiao: r.regiao || '',
       // celular vem em outras_dimensoes (vide payloadFin)
       celular: !!(r.outras_dimensoes && r.outras_dimensoes.celular),
+      // origem e ponderacao_nome vêm de outras_dimensoes para registros de ponderação
+      origem: (r.outras_dimensoes && r.outras_dimensoes.origem) || '',
+      ponderacao_nome: (r.outras_dimensoes && r.outras_dimensoes.ponderacao_nome) || '',
+      id_original: (r.outras_dimensoes && r.outras_dimensoes.id_original) || null,
       respostas: r.respostas || {},
       editado_em: r.editado_em || null,
       motivo_edicao: r.motivo_edicao || null
