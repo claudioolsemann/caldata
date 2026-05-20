@@ -14533,6 +14533,7 @@ function pgExportar() {
       </div>
       <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
         <button class="btn btn-p btn-sm" onclick="expCSV()">Baixar CSV (Excel)</button>
+        <button class="btn btn-sm" style="color:#e05252;border-color:#e05252" onclick="expPDF()">Baixar PDF</button>
         <button class="btn btn-s btn-sm" onclick="expSQL()">Baixar SQL INSERT</button>
         <button class="btn btn-sm"       onclick="expJSON()">Baixar JSON</button>
         <button class="btn btn-sm" style="color:#b37d00;border-color:#ffd700" onclick="expPausasCSV()">Baixar Pausas CSV</button>
@@ -14776,6 +14777,72 @@ function expCSV() {
     ].map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(',');
   });
   dl([hdr.join(','),...rows].join('\n'),'call-dados.csv','text/csv');
+}
+
+function expPDF() {
+  const regs = getExpRegs();
+  if (!regs.length) { toast('Sem dados'); return; }
+  const jsPDFCtor = window.jspdf?.jsPDF || window.jsPDF;
+  if (!jsPDFCtor) { toast('❌ jsPDF não carregou'); return; }
+
+  const qid  = document.getElementById('exp-q')?.value;
+  const q    = DB.pesquisas.find(x => x.id == qid);
+  const nome = q ? nomeQ(q) : 'Todas as pesquisas';
+  const doc  = new jsPDFCtor({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+  doc.setFontSize(13);
+  doc.text('Exportação de Registros — ' + nome, 14, 14);
+  doc.setFontSize(9);
+  doc.setTextColor(120);
+  doc.text('Gerado em ' + agora + ' · ' + regs.length + ' registros', 14, 20);
+  doc.setTextColor(0);
+
+  const head = [['#', 'Data/Hora', 'Operador', 'Pesquisa', 'Status', 'Sexo', 'Faixa Etária', 'Instrução', 'Localidade', 'Duração', 'Tipo']];
+  const body = regs.map((r, i) => [
+    i + 1,
+    r.dh ? new Date(r.dh).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '',
+    r.op_nome || '',
+    r.pesquisa_nome || '',
+    r.status_txt || '',
+    r.sexo || '',
+    r.faixa_etaria || '',
+    r.escolaridade || '',
+    r.regiao || '',
+    r.duracao_seg ? Math.floor(r.duracao_seg/60) + ':' + String(r.duracao_seg%60).padStart(2,'0') : '',
+    r.origem === 'ponderacao' ? 'Pond.' : 'Real'
+  ]);
+
+  doc.autoTable({
+    startY: 24,
+    head,
+    body,
+    styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak' },
+    headStyles: { fillColor: [30, 36, 54], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [245, 246, 250] },
+    columnStyles: {
+      0:  { cellWidth: 8 },
+      1:  { cellWidth: 32 },
+      2:  { cellWidth: 28 },
+      3:  { cellWidth: 32 },
+      4:  { cellWidth: 22 },
+      5:  { cellWidth: 16 },
+      6:  { cellWidth: 24 },
+      7:  { cellWidth: 22 },
+      8:  { cellWidth: 20 },
+      9:  { cellWidth: 14 },
+      10: { cellWidth: 12 }
+    },
+    didDrawPage: function(data) {
+      doc.setFontSize(7);
+      doc.setTextColor(150);
+      doc.text('Página ' + data.pageNumber, doc.internal.pageSize.width - 20, doc.internal.pageSize.height - 8);
+    }
+  });
+
+  const stamp = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+  doc.save('registros_' + stamp + '.pdf');
+  toast('✓ PDF gerado — ' + regs.length + ' registros');
 }
 
 function expSQL() {
