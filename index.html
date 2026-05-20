@@ -5120,86 +5120,7 @@ function renderVisaoGeral() {
     </div>
     <div class="pb" style="margin-bottom:1rem"><div class="pb-f" style="width:${pct}%"></div></div>
 
-    ${(()=>{
-      // ── Card matriz cruzada — só para pesquisas cruzadas com matriz ──
-      if (q.tipoCota !== 'cruzado' || !Array.isArray(q.matriz4D) || q.matriz4D.length === 0) return '';
-
-      const valSemPond = validas.filter(r => r.origem !== 'ponderacao');
-      const mapRegLoc  = typeof _construirMapaRegLoc === 'function' ? _construirMapaRegLoc(q) : new Map();
-      const locsNaMatriz = [...new Set(q.matriz4D.map(c => c.loc))];
-
-      // Conta por célula
-      const celCount = {};
-      valSemPond.forEach(r => {
-        const regUp = String(r.regiao || '').toUpperCase().trim();
-        let locR = mapRegLoc.get(regUp) || regUp;
-        if (!locR && locsNaMatriz.length === 1) locR = locsNaMatriz[0];
-        const sexR = String(r.sexo || '').toUpperCase().trim();
-        const idaR = String(r.faixa_etaria || r.idade || '').toUpperCase().trim();
-        const insR = String(r.escolaridade || r.instrucao || '').toUpperCase().trim();
-        let cel = q.matriz4D.find(c =>
-          _matchCota(locR,c.loc) && _matchCota(sexR,c.sexo) &&
-          _matchCota(idaR,c.idade) && _matchCota(insR,c.instrucao)
-        );
-        if (!cel && !insR) cel = q.matriz4D.find(c => _matchCota(locR,c.loc) && _matchCota(sexR,c.sexo) && _matchCota(idaR,c.idade));
-        if (!cel && !locR) cel = q.matriz4D.find(c => _matchCota(sexR,c.sexo) && _matchCota(idaR,c.idade));
-        if (cel) {
-          const key = cel.loc+'|'+cel.sexo+'|'+cel.idade+'|'+cel.instrucao;
-          celCount[key] = (celCount[key]||0) + 1;
-        }
-      });
-
-      const celComMeta = q.matriz4D.filter(c => c.meta > 0);
-      const totalCel   = celComMeta.length;
-      const completas  = celComMeta.filter(c => (celCount[c.loc+'|'+c.sexo+'|'+c.idade+'|'+c.instrucao]||0) >= c.meta).length;
-      const emAndamento= celComMeta.filter(c => { const a = celCount[c.loc+'|'+c.sexo+'|'+c.idade+'|'+c.instrucao]||0; return a > 0 && a < c.meta; }).length;
-      const zerando    = totalCel - completas - emAndamento;
-      const pctMat     = totalCel ? Math.round(completas/totalCel*100) : 0;
-      const corStatus  = completas===totalCel ? '#1D9E75' : emAndamento > 0 ? '#f0b840' : '#888';
-
-      // Grid por localidade
-      const locais = [...new Set(celComMeta.map(c => c.loc))];
-      const gridLocs = locais.map(loc => {
-        const cels = celComMeta.filter(c => c.loc === loc);
-        const miniCards = cels.map(c => {
-          const key  = c.loc+'|'+c.sexo+'|'+c.idade+'|'+c.instrucao;
-          const atual = celCount[key]||0;
-          const pctC  = Math.min(100, Math.round(atual/c.meta*100));
-          const cor   = atual >= c.meta ? '#1D9E75' : atual > 0 ? '#f0b840' : '#555';
-          return \`<div title="\${c.loc} · \${c.sexo} · \${c.idade} · \${c.instrucao}" style="background:#1a2035;border-radius:6px;padding:6px 8px">
-            <div style="display:flex;justify-content:space-between;font-size:10px;color:#8b95aa;margin-bottom:3px">
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px">\${c.sexo} · \${c.idade}</span>
-              <span style="color:\${cor};font-weight:700;flex-shrink:0;margin-left:4px">\${atual}/\${c.meta}</span>
-            </div>
-            <div style="height:4px;background:#2a3050;border-radius:2px">
-              <div style="height:4px;width:\${pctC}%;background:\${cor};border-radius:2px"></div>
-            </div>
-          </div>\`;
-        }).join('');
-        return \`<div style="margin-bottom:12px">
-          <div style="font-size:11px;font-weight:700;color:#c4cad8;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">\${loc}</div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px">\${miniCards}</div>
-        </div>\`;
-      }).join('');
-
-      return \`<div class="card" style="margin-bottom:1rem">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="card-title" style="margin:0">Matriz cruzada 4D</div>
-          <div style="display:flex;gap:12px;font-size:12px">
-            <span style="color:#1D9E75">✓ \${completas} completas</span>
-            <span style="color:#f0b840">◑ \${emAndamento} em andamento</span>
-            <span style="color:#555">○ \${zerando} zeradas</span>
-          </div>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-          <div style="flex:1;height:6px;background:#2a3050;border-radius:3px">
-            <div style="height:6px;width:\${pctMat}%;background:\${corStatus};border-radius:3px;transition:width .4s"></div>
-          </div>
-          <span style="font-size:13px;font-weight:700;color:\${corStatus};white-space:nowrap">\${completas}/\${totalCel} (\${pctMat}%)</span>
-        </div>
-        \${gridLocs}
-      </div>\`;
-    })()}
+    ${_vgCardMatriz(q, validas)}
 
     <div class="card">
       <div class="card-title">Status da equipe — ${nomeQ(q)}</div>
@@ -5221,6 +5142,75 @@ function renderVisaoGeral() {
           </table>
         </div>` : '<div style="font-size:13px;color:#aaa">Nenhum operador neste questionário.</div>'}
     </div>`;
+}
+
+// ─── Card Matriz 4D para Visão Geral ───
+function _vgCardMatriz(q, validas) {
+  if (q.tipoCota !== 'cruzado' || !Array.isArray(q.matriz4D) || q.matriz4D.length === 0) return '';
+  const valSemPond = validas.filter(function(r){ return r.origem !== 'ponderacao'; });
+  const mapRegLoc  = typeof _construirMapaRegLoc === 'function' ? _construirMapaRegLoc(q) : new Map();
+  const locsNaMatriz = [...new Set(q.matriz4D.map(function(c){ return c.loc; }))];
+  const celCount = {};
+  valSemPond.forEach(function(r) {
+    const regUp = String(r.regiao || '').toUpperCase().trim();
+    let locR = mapRegLoc.get(regUp) || regUp;
+    if (!locR && locsNaMatriz.length === 1) locR = locsNaMatriz[0];
+    const sexR = String(r.sexo || '').toUpperCase().trim();
+    const idaR = String(r.faixa_etaria || r.idade || '').toUpperCase().trim();
+    const insR = String(r.escolaridade || r.instrucao || '').toUpperCase().trim();
+    let cel = q.matriz4D.find(function(c){ return _matchCota(locR,c.loc)&&_matchCota(sexR,c.sexo)&&_matchCota(idaR,c.idade)&&_matchCota(insR,c.instrucao); });
+    if (!cel && !insR) cel = q.matriz4D.find(function(c){ return _matchCota(locR,c.loc)&&_matchCota(sexR,c.sexo)&&_matchCota(idaR,c.idade); });
+    if (!cel && !locR) cel = q.matriz4D.find(function(c){ return _matchCota(sexR,c.sexo)&&_matchCota(idaR,c.idade); });
+    if (cel) { const key=cel.loc+'|'+cel.sexo+'|'+cel.idade+'|'+cel.instrucao; celCount[key]=(celCount[key]||0)+1; }
+  });
+  const celComMeta = q.matriz4D.filter(function(c){ return c.meta > 0; });
+  const totalCel   = celComMeta.length;
+  if (!totalCel) return '';
+  const completas   = celComMeta.filter(function(c){ return (celCount[c.loc+'|'+c.sexo+'|'+c.idade+'|'+c.instrucao]||0) >= c.meta; }).length;
+  const emAndamento = celComMeta.filter(function(c){ const a=celCount[c.loc+'|'+c.sexo+'|'+c.idade+'|'+c.instrucao]||0; return a>0&&a<c.meta; }).length;
+  const zerando     = totalCel - completas - emAndamento;
+  const pctMat      = Math.round(completas/totalCel*100);
+  const corStatus   = completas===totalCel ? '#1D9E75' : emAndamento>0 ? '#f0b840' : '#888';
+  const locais = [...new Set(celComMeta.map(function(c){ return c.loc; }))];
+  let gridLocs = '';
+  locais.forEach(function(loc) {
+    const cels = celComMeta.filter(function(c){ return c.loc === loc; });
+    let miniCards = '';
+    cels.forEach(function(c) {
+      const key   = c.loc+'|'+c.sexo+'|'+c.idade+'|'+c.instrucao;
+      const atual = celCount[key]||0;
+      const pctC  = Math.min(100, Math.round(atual/c.meta*100));
+      const cor   = atual>=c.meta ? '#1D9E75' : atual>0 ? '#f0b840' : '#555';
+      miniCards += '<div title="'+c.loc+' · '+c.sexo+' · '+c.idade+' · '+c.instrucao+'" style="background:#1a2035;border-radius:6px;padding:6px 8px">'
+        + '<div style="display:flex;justify-content:space-between;font-size:10px;color:#8b95aa;margin-bottom:3px">'
+        + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px">'+c.sexo+' · '+c.idade+'</span>'
+        + '<span style="color:'+cor+';font-weight:700;flex-shrink:0;margin-left:4px">'+atual+'/'+c.meta+'</span>'
+        + '</div>'
+        + '<div style="height:4px;background:#2a3050;border-radius:2px">'
+        + '<div style="height:4px;width:'+pctC+'%;background:'+cor+';border-radius:2px"></div>'
+        + '</div></div>';
+    });
+    gridLocs += '<div style="margin-bottom:12px">'
+      + '<div style="font-size:11px;font-weight:700;color:#c4cad8;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">'+loc+'</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px">'+miniCards+'</div>'
+      + '</div>';
+  });
+  return '<div class="card" style="margin-bottom:1rem">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+    + '<div class="card-title" style="margin:0">Matriz cruzada 4D</div>'
+    + '<div style="display:flex;gap:12px;font-size:12px">'
+    + '<span style="color:#1D9E75">&#10003; '+completas+' completas</span>'
+    + '<span style="color:#f0b840">&#9678; '+emAndamento+' em andamento</span>'
+    + '<span style="color:#555">&#9675; '+zerando+' zeradas</span>'
+    + '</div></div>'
+    + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
+    + '<div style="flex:1;height:6px;background:#2a3050;border-radius:3px">'
+    + '<div style="height:6px;width:'+pctMat+'%;background:'+corStatus+';border-radius:3px"></div>'
+    + '</div>'
+    + '<span style="font-size:13px;font-weight:700;color:'+corStatus+';white-space:nowrap">'+completas+'/'+totalCel+' ('+pctMat+'%)</span>'
+    + '</div>'
+    + gridLocs
+    + '</div>';
 }
 
 // ─── DETALHE DE UM OPERADOR EM UM QUESTIONÁRIO ───
