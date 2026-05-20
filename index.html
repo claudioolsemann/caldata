@@ -6267,6 +6267,18 @@ function renderEditorQ(titulo) {
         </div>
       </div>
 
+      <div id="eq-dims-cruzada" style="display:none;margin-top:1rem;padding:1rem;background:#1e2433;border-radius:12px;border:1.5px solid #FF4D00">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:#FF7E3A">🧩 Dimensões da matriz cruzada</div>
+            <div style="font-size:11px;color:#8b95aa;margin-top:2px">Defina as categorias de cada dimensão. A matriz será gerada automaticamente com todas as combinações.</div>
+          </div>
+          <button class="btn btn-sm" style="border-color:#FF4D00;color:#FF7E3A;font-size:11px" onclick="_eqAdicionarDim()">+ Dimensão</button>
+        </div>
+        <div id="eq-dims-lista"></div>
+        <div id="eq-dim-editor-inline" style="margin-top:8px"></div>
+      </div>
+
       <div style="margin-top:1.25rem">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;gap:8px;flex-wrap:wrap">
           <div style="font-size:13px;font-weight:700">Perguntas (${(q.perguntas||[]).length})</div>
@@ -6342,6 +6354,8 @@ function renderEditorQ(titulo) {
       </div>
     </div>`;
   document.getElementById('editor-q').scrollIntoView({behavior:'smooth'});
+  // 4.12: se pesquisa já é cruzada, exibir painel de dimensões imediatamente
+  _atualizarBordaTipoCota();
 }
 
 function toggleNpOpts() {
@@ -6697,6 +6711,19 @@ async function salvarQ() {
     }
     salvarTudo();
     toast('✓ Pesquisa salva no banco e localmente!');
+
+    // ─── 4.12: sync de dims se cota cruzada ───
+    if (editandoQ.tipoCota === 'cruzado' && editandoQ.banco_id && Array.isArray(editandoQ.dims)) {
+      const qSalva = DB.pesquisas.find(q => q.id == editandoQ.id) || editandoQ;
+      editandoQ.dims.forEach(d => {
+        if (d && d.k) {
+          window._sincronizarDimensaoCotas(qSalva, d.k).catch(e =>
+            console.warn('[4.12] Falha ao sincronizar dim', d.k, e)
+          );
+        }
+      });
+    }
+
     document.getElementById('editor-q').innerHTML='';
     pgPesquisas();
   } catch (e) {
@@ -16754,6 +16781,110 @@ function _atualizarBordaTipoCota() {
   grupo.querySelectorAll('label[data-tipo]').forEach(lbl => {
     lbl.style.border = '2px solid ' + (lbl.dataset.tipo === sel ? '#FF4D00' : 'transparent');
   });
+  // Mostra/oculta painel de dimensões da matriz 4D
+  const painelDims = document.getElementById('eq-dims-cruzada');
+  if (painelDims) {
+    painelDims.style.display = sel === 'cruzado' ? '' : 'none';
+    if (sel === 'cruzado') _eqRenderDims();
+  }
+}
+
+// ─── 4.12 — Editor de dimensões inline no editor de pesquisa ───
+
+function _eqGetDims() {
+  // Pega dims do editandoQ (pode ser nova pesquisa ou existente)
+  if (!editandoQ.dims || editandoQ.dims.length === 0) {
+    // Inicializa com as 4 dimensões padrão da cota cruzada
+    editandoQ.dims = [
+      { lbl:'Localização',  k:'geo_localizacao', itens:[] },
+      { lbl:'Sexo',         k:'sexo',            itens:['MASCULINO','FEMININO'] },
+      { lbl:'Faixa etária', k:'faixa_etaria',    itens:['16 A 24 ANOS','25 A 34 ANOS','35 A 54 ANOS','55 ANOS OU MAIS'] },
+      { lbl:'Escolaridade', k:'escolaridade',    itens:['ATÉ FUNDAMENTAL','ENSINO MÉDIO','SUPERIOR'] },
+    ];
+  }
+  return editandoQ.dims;
+}
+
+function _eqRenderDims() {
+  const lista = document.getElementById('eq-dims-lista');
+  if (!lista) return;
+  const dims = _eqGetDims();
+  const _4chaves = ['geo_localizacao','sexo','faixa_etaria','escolaridade'];
+  lista.innerHTML = dims.map((d, i) => {
+    const obrigatoria = _4chaves.includes(d.k);
+    const temItens = d.itens && d.itens.length > 0;
+    const cor = temItens ? '#2dc98e' : '#f0b840';
+    return `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#252e44;border-radius:8px;margin-bottom:6px;border:1px solid #3a4560">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:700;color:#f0f2f8">${d.lbl}</div>
+        <div style="font-size:11px;color:#636d88;font-family:monospace">${d.k}</div>
+        <div style="font-size:11px;color:${cor};margin-top:2px">
+          ${temItens ? d.itens.length + ' categorias: ' + d.itens.slice(0,3).join(', ') + (d.itens.length > 3 ? '…' : '') : '⚠ Sem categorias — clique em Editar'}
+        </div>
+      </div>
+      <button class="btn btn-sm" style="white-space:nowrap;font-size:11px" onclick="_eqEditarDim(${i})">✏ Editar</button>
+      ${!obrigatoria ? `<button class="btn btn-sm btn-d" style="font-size:11px" onclick="_eqRemoverDim(${i})">×</button>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function _eqEditarDim(idx) {
+  const editor = document.getElementById('eq-dim-editor-inline');
+  if (!editor) return;
+  const dims = _eqGetDims();
+  const d = dims[idx];
+  editor.innerHTML = `
+    <div style="background:#2e3850;border-radius:10px;padding:14px;border:1.5px solid #FF4D00;margin-top:4px">
+      <div style="font-size:12px;font-weight:700;color:#FF7E3A;margin-bottom:10px">✏ Editar dimensão</div>
+      <div class="row">
+        <div class="col">
+          <label>Nome da dimensão</label>
+          <input id="eqdim-lbl" value="${d.lbl}" placeholder="Ex: Localização">
+        </div>
+        <div class="col">
+          <label>Chave interna <span style="font-weight:400;color:#636d88">(sem espaços)</span></label>
+          <input id="eqdim-k" value="${d.k}" placeholder="Ex: geo_localizacao">
+        </div>
+      </div>
+      <label style="margin-top:8px">Categorias <span style="font-weight:400;color:#636d88">(uma por linha, em MAIÚSCULAS)</span></label>
+      <textarea id="eqdim-itens" rows="6" placeholder="CENTRO&#10;NORTE&#10;SUL&#10;LESTE&#10;OESTE" style="font-family:monospace;font-size:12px">${(d.itens||[]).join('\n')}</textarea>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-p btn-sm" onclick="_eqSalvarDim(${idx})">✓ Salvar</button>
+        <button class="btn btn-sm" onclick="document.getElementById('eq-dim-editor-inline').innerHTML=''">Cancelar</button>
+      </div>
+    </div>`;
+  editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function _eqSalvarDim(idx) {
+  const lbl   = document.getElementById('eqdim-lbl')?.value.trim();
+  const k     = document.getElementById('eqdim-k')?.value.trim().replace(/\s+/g,'_').toLowerCase();
+  const itens = (document.getElementById('eqdim-itens')?.value || '').split('\n').map(x=>x.trim().toUpperCase()).filter(Boolean);
+  if (!lbl || !k) { toast('Preencha nome e chave'); return; }
+  const dims = _eqGetDims();
+  dims[idx] = { ...dims[idx], lbl, k, itens };
+  editandoQ.dims = dims;
+  document.getElementById('eq-dim-editor-inline').innerHTML = '';
+  _eqRenderDims();
+  toast('✓ Dimensão atualizada');
+}
+
+function _eqRemoverDim(idx) {
+  const dims = _eqGetDims();
+  if (!confirm('Remover dimensão "' + dims[idx].lbl + '"?')) return;
+  dims.splice(idx, 1);
+  editandoQ.dims = dims;
+  document.getElementById('eq-dim-editor-inline').innerHTML = '';
+  _eqRenderDims();
+}
+
+function _eqAdicionarDim() {
+  const dims = _eqGetDims();
+  dims.push({ lbl: 'Nova dimensão', k: 'dim_' + Date.now(), itens: [] });
+  editandoQ.dims = dims;
+  _eqRenderDims();
+  setTimeout(() => _eqEditarDim(dims.length - 1), 50);
 }
 
 // ════════════════════════════════════════════════════════════════
