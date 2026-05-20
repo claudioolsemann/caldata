@@ -14379,7 +14379,13 @@ function expCSV() {
     const tipoReg = r.origem === 'ponderacao' ? 'ponderacao' : 'entrevista';
     // Tenta encontrar telefone associado ao registro
     const telInfo = telMap[r.op_id + '_' + r.pesquisa_id] || {};
-    const telNum  = r.telefone || telInfo.tel || '';
+    // Para ponderação sem telefone: herda do registro original via id_original
+    let telNum = r.telefone || '';
+    if (!telNum && r.origem === 'ponderacao' && r.id_original) {
+      const rOrig = DB.registros.find(x => x.id == r.id_original);
+      telNum = rOrig?.telefone || '';
+    }
+    telNum = telNum || telInfo.tel || '';
     const telTipo = r.tipo_telefone || telInfo.tipo_uso || (tipoReg === 'ponderacao' ? 'ponderacao' : 'entrevista');
     return [
       r.id, r.dh, r.op_nome, r.pesquisa_nome,
