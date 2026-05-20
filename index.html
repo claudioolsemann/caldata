@@ -7004,6 +7004,25 @@ function _audChipPerfil(perfil) {
   return `<span style="font-size:10px;color:#636d88">${perfil || '—'}</span>`;
 }
 
+// ─── Helper: múltipla escolha — contagem e match ─────────────────────────
+// _respVals(v): normaliza valor de resposta para array de strings
+//   - array ["A","B"] → ["A","B"]
+//   - string "A"      → ["A"]
+//   - null/undefined  → []
+function _respVals(v) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.map(String);
+  return [String(v)];
+}
+// _respMatch(v, opt): true se opt está entre os valores da resposta
+function _respMatch(v, opt) {
+  return _respVals(v).includes(String(opt));
+}
+// _respCnt(cnt, v): incrementa cnt[opção] para cada opção em v (trata múltipla)
+function _respCnt(cnt, v) {
+  _respVals(v).forEach(k => { if (k) cnt[k] = (cnt[k]||0)+1; });
+}
+
 // Helper: escapa HTML
 function _audEscape(s) {
   if (s === null || s === undefined) return '';
@@ -7088,6 +7107,7 @@ async function pgAuditoria() {
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-sm" onclick="pgAuditoriaExportarPDF()" id="btn-aud-pdf" disabled style="border-color:#c44;color:#ff8888">📄 PDF</button>
         <button class="btn btn-sm" onclick="pgAuditoriaExportarExcel()" id="btn-aud-xls" disabled style="border-color:#2dc98e;color:#2dc98e">📊 Excel</button>
+        <button class="btn btn-sm" onclick="pgAuditoriaExportarCSV()" id="btn-aud-csv" disabled style="border-color:#7f77dd;color:#7f77dd">📋 CSV</button>
         <button class="btn btn-sm" onclick="pgAuditoriaAplicarFiltros()" style="color:#2dc98e;border-color:#2dc98e">↻ Atualizar</button>
       </div>
     </div>
@@ -7218,6 +7238,7 @@ async function pgAuditoriaAplicarFiltros() {
   body.innerHTML = '<div style="text-align:center;padding:30px;color:#8b95aa">⏳ Consultando auditoria…</div>';
   document.getElementById('btn-aud-pdf').disabled = true;
   document.getElementById('btn-aud-xls').disabled = true;
+  document.getElementById('btn-aud-csv').disabled = true;
 
   const filtros = _audColetarFiltros();
   filtros.p_offset = _audEstado.paginaAtual * filtros.p_limite;
@@ -7262,6 +7283,7 @@ function _audRenderizarTabela(linhas) {
 
   document.getElementById('btn-aud-pdf').disabled = false;
   document.getElementById('btn-aud-xls').disabled = false;
+  document.getElementById('btn-aud-csv').disabled = false;
 
   const trs = linhas.map((l, idx) => {
     const idLinha = `aud-row-${pag}-${idx}`;
@@ -7480,6 +7502,49 @@ async function pgAuditoriaExportarExcel() {
   toast('✓ Excel gerado');
 }
 
+
+// ─── EXPORTAÇÃO CSV ────────────────────────────────────────────────────────
+async function pgAuditoriaExportarCSV() {
+  const f = _audEstado.ultimoFiltro;
+  if (!f) { toast('Aplique um filtro primeiro'); return; }
+
+  toast('⏳ Gerando CSV…');
+  const filtros = { ...f, p_limite: 5000, p_offset: 0 };
+  let linhas = [];
+  try {
+    const { data, error } = await supabaseClient.rpc('listar_auditoria', filtros);
+    if (error) throw error;
+    linhas = data || [];
+  } catch (e) {
+    toast('❌ Erro: ' + (e.message || e));
+    return;
+  }
+
+  if (linhas.length === 0) { toast('Nada pra exportar'); return; }
+
+  const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  const hdr = ['data_hora','usuario_id','login','nome','perfil','acao','entidade','entidade_id','resumo','origem','observacao','antes_json','depois_json'];
+  const rows = linhas.map(l => [
+    _audFmtDataBR(l.criado_em),
+    l.user_id || '',
+    l.user_login || '',
+    l.user_nome || '',
+    l.user_perfil || '',
+    l.acao || '',
+    l.entidade || '',
+    l.entidade_id || '',
+    l.resumo || '',
+    l.origem || 'web',
+    l.observacao || '',
+    l.antes  ? JSON.stringify(l.antes)  : '',
+    l.depois ? JSON.stringify(l.depois) : ''
+  ].map(esc).join(','));
+
+  const csv = [hdr.join(','), ...rows].join('\n');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  dl(csv, `auditoria_${stamp}.csv`, 'text/csv');
+  toast('✓ CSV gerado — ' + linhas.length + ' registros');
+}
 
 // ─── BOTÃO "📜 HISTÓRICO" POR PESQUISA ───
 async function verHistoricoPesquisa(qid) {
@@ -9647,12 +9712,11 @@ function _cntResp(regs,perg,opt){
   const isIdade = _ehPergIdade(perg);
   const optEhFaixa = _FAIXAS_ETARIAS.includes(String(opt).toUpperCase());
   return regs.filter(r=>{
-    let v = String((r.respostas||{})[perg.id]||'');
-    if (isIdade || optEhFaixa) {
-      const norm = normalizarFaixaEtaria(v);
-      if (norm) v = norm;
-    }
-    return v.toUpperCase() === String(opt).toUpperCase();
+    const _rVals = _respVals((r.respostas||{})[perg.id]);
+    return _rVals.some(v => {
+      if (isIdade || optEhFaixa) { const norm = normalizarFaixaEtaria(v); if (norm) v = norm; }
+      return v.toUpperCase() === String(opt).toUpperCase();
+    });
   }).length;
 }
 
@@ -10126,7 +10190,7 @@ function gerarCruzPxP() {
     lbl: ESCL[parseInt(oa)] ? `${oa} — ${ESCL[parseInt(oa)]}` : oa,
     cntTotal: _cntResp(regs,pA,oa),
     cols: optsB.map(ob => {
-      const sub = regs.filter(r=>String((r.respostas||{})[pA.id])===String(oa));
+      const sub = regs.filter(r=>_respMatch((r.respostas||{})[pA.id],oa));
       return { cnt: _cntResp(sub,pB,ob), tot: sub.length };
     })
   }));
@@ -10666,7 +10730,7 @@ function renderGraficos() {
       return true;
     }).map(p=>{
       const cnt={};
-      regs.forEach(r=>{const v=(r.respostas||{})[p.id];if(v!=null)cnt[String(v)]=(cnt[String(v)]||0)+1;});
+      regs.forEach(r=>{_respCnt(cnt,(r.respostas||{})[p.id]);});
       const keys=Object.keys(cnt).sort((a,b)=>isNaN(a)||isNaN(b)?0:a-b);
       if(!keys.length)return '';
       const maxV=Math.max(...Object.values(cnt),1);
@@ -10716,7 +10780,7 @@ function exportResultadosExcel() {
     const data = [['PERGUNTA','VAR','RESPOSTA','N','%']];
     pergs.forEach(p => {
       const cnt = {};
-      regs.forEach(r => { const v=(r.respostas||{})[p.id]; if(v!=null) cnt[String(v)]=(cnt[String(v)]||0)+1; });
+      regs.forEach(r => { _respCnt(cnt,(r.respostas||{})[p.id]); });
       Object.entries(cnt).sort((a,b)=>isNaN(a[0])||isNaN(b[0])?0:a[0]-b[0]).forEach(([k,v]) => {
         const lbl = ESC_L[parseInt(k)] ? k+' — '+ESC_L[parseInt(k)] : k;
         data.push([p.txt?.slice(0,50)||'', p.var_cod, lbl, v, Math.round(v/n*100)+'%']);
@@ -10740,12 +10804,13 @@ function exportResultadosExcel() {
         const cnt = {}; // cnt[resposta][grupo] = n
         const total = {};
         regs.forEach(r => {
-          const v = (r.respostas||{})[p.id]; if(v==null) return;
-          const k = String(v);
+          const _vs = _respVals((r.respostas||{})[p.id]); if(!_vs.length) return;
           const g = r[campo]||'';
-          cnt[k] = cnt[k] || {};
-          cnt[k][g] = (cnt[k][g]||0)+1;
-          total[k] = (total[k]||0)+1;
+          _vs.forEach(k => {
+            cnt[k] = cnt[k] || {};
+            cnt[k][g] = (cnt[k][g]||0)+1;
+            total[k] = (total[k]||0)+1;
+          });
         });
         const keys = Object.keys(cnt).sort((a,b)=>isNaN(a)||isNaN(b)?0:a-b);
         keys.forEach(k => {
@@ -10796,7 +10861,7 @@ function exportResultadosPDF() {
 
   const blocos = pergs.map(p => {
     const cnt = {};
-    regs.forEach(r => { const v=(r.respostas||{})[p.id]; if(v!=null) cnt[String(v)]=(cnt[String(v)]||0)+1; });
+    regs.forEach(r => { _respCnt(cnt,(r.respostas||{})[p.id]); });
     const keys = Object.keys(cnt).sort((a,b)=>isNaN(a)||isNaN(b)?0:a-b);
     if(!keys.length) return '';
     const maxV = Math.max(...Object.values(cnt),1);
@@ -13491,7 +13556,7 @@ function renderPonderacao() {
   function distPerg(regs, perg) {
     const opts = perg.tipo==='escala5' ? ['1','2','3','4','5','6','7'] : (perg.opts||[]);
     return opts.map(opt => {
-      const cnt = regs.filter(r => String((r.respostas||{})[perg.id]) === String(opt)).length;
+      const cnt = regs.filter(r => _respMatch((r.respostas||{})[perg.id],opt)).length;
       return { opt, cnt, pct: regs.length ? Math.round(cnt/regs.length*100) : 0 };
     }).filter(x => x.cnt > 0);
   }
@@ -13689,7 +13754,7 @@ function calcularPonderacao() {
     const pergRows = pergs.map(p => {
       const opts = p.tipo==='escala5'?['1','2','3','4','5','6','7']:(p.opts||[]);
       return opts.map(opt => {
-        const cnt = reais.filter(r=>String((r.respostas||{})[p.id])===String(opt)).length;
+        const cnt = reais.filter(r=>_respMatch((r.respostas||{})[p.id],opt)).length;
         if (!cnt) return '';
         const alvo = Math.round(cnt*fator);
         const lbl  = ESCL[parseInt(opt)] ? `${opt}—${ESCL[parseInt(opt)]}` : opt;
@@ -13766,14 +13831,14 @@ function calcularPonderacao() {
     const ESCL = {1:'ÓTIMA',2:'BOA',3:'REGULAR',4:'RUIM',5:'PÉSSIMA',6:'NÃO SABE',7:'NÃO RESPONDEU'};
     const rows = pergs.map(p => {
       const opts = p.tipo==='escala5'?['1','2','3','4','5','6','7']:(p.opts||[]);
-      const usados = opts.filter(opt => reais.some(r=>String((r.respostas||{})[p.id])===String(opt)));
+      const usados = opts.filter(opt => reais.some(r=>_respMatch((r.respostas||{})[p.id],opt)));
       if (!usados.length) return '';
       return `<div style="margin-bottom:12px">
         <div style="font-size:11px;font-weight:700;color:#f0b840;letter-spacing:.06em;margin-bottom:6px">
           ${p.var_cod} — ${(p.txt||'').slice(0,55)}${(p.txt||'').length>55?'...':''}
         </div>
         ${usados.map(opt => {
-          const cnt = reais.filter(r=>String((r.respostas||{})[p.id])===String(opt)).length;
+          const cnt = reais.filter(r=>_respMatch((r.respostas||{})[p.id],opt)).length;
           const sug = Math.max(0, Math.round(cnt*fator)-cnt);
           const lbl = ESCL[parseInt(opt)] ? `${opt} — ${ESCL[parseInt(opt)]}` : opt;
           const key = `pond-perg-${p.id}-${String(opt).replace(/\W+/g,'_')}`;
@@ -13867,7 +13932,7 @@ function aplicarPonderacao(qid) {
         const key = `pond-perg-${p.id}-${String(opt).replace(/\W+/g,'_')}`;
         const qtd = parseInt(document.getElementById(key)?.value)||0;
         if (!qtd) return;
-        const pool = reais.filter(r=>String((r.respostas||{})[p.id])===String(opt));
+        const pool = reais.filter(r=>_respMatch((r.respostas||{})[p.id],opt));
         if (!pool.length) return;
         for (let i=0; i<qtd; i++) {
           const r = pool[i%pool.length];
@@ -14210,7 +14275,9 @@ function expCSV() {
     });
   });
 
-  const hdr = ['id','dh','operador','pesquisa','tipo_registro','telefone','tipo_telefone','status','status_txt','sexo','faixa_etaria','escolaridade','regiao','celular','duracao_seg',...up.map(p=>p.var_cod||p.id)];
+  // Chave de resposta: var_cod se existir, senão String(id) — mesmo padrão do B3-retro
+  const _pChave = p => p.var_cod || String(p.id);
+  const hdr = ['id','dh','operador','pesquisa','tipo_registro','telefone','tipo_telefone','status','status_txt','sexo','faixa_etaria','escolaridade','regiao','celular','duracao_seg',...up.map(_pChave)];
   const rows = regs.map(r => {
     const tipoReg = r.origem === 'ponderacao' ? 'ponderacao' : 'entrevista';
     // Tenta encontrar telefone associado ao registro
@@ -14223,7 +14290,7 @@ function expCSV() {
       r.status, r.status_txt||'',
       r.sexo||'', r.faixa_etaria||'', r.escolaridade||'', r.regiao||'',
       r.celular?1:0, r.duracao_seg||0,
-      ...up.map(p=>{const v=(r.respostas||{})[p.id];return Array.isArray(v)?v.join('|'):(v!=null?v:'');})
+      ...up.map(p=>{const chave=_pChave(p);const v=(r.respostas||{})[chave];return Array.isArray(v)?v.join('|'):(v!=null?v:'');})
     ].map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(',');
   });
   dl([hdr.join(','),...rows].join('\n'),'call-dados.csv','text/csv');
@@ -15559,7 +15626,11 @@ function regStatus(cod, txt) {
     return;
   }
   const q = DB.pesquisas.find(p => (p.banco_id && p.banco_id == qid) || p.id == qid);
-  const pesquisaIdBanco = q?.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  if (!q?.banco_id) {
+    toast('❌ Esta pesquisa não está sincronizada com o banco. Peça ao administrador para salvar o questionário antes de iniciar coleta.');
+    return;
+  }
+  const pesquisaIdBanco = parseInt(q.banco_id);
   const agora = Date.now();
   const duracao_seg = Math.round((agora - _ultimoReg) / 1000);
   _ultimoReg = agora;
@@ -18958,7 +19029,7 @@ window._b6RenderStatus = function(statusArr) {
     </div>
     <table style="width:100%;border-collapse:collapse">
       <thead><tr style="background:#252e44">
-        <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:left">Cidade</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:left">Localidade</th>
         <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:right">Total tels</th>
         <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:right">Disp.</th>
         <th style="padding:7px 10px;font-size:10px;font-weight:600;color:#8b95aa;text-transform:uppercase;letter-spacing:.3px;text-align:right">Válidas (operador)</th>
