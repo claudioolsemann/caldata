@@ -8449,6 +8449,18 @@ function renderCotasCruzadas(q) {
 
   // 1. Tenta extrair as 4 dimensões — se faltar algo, mostra aviso
   const ext = _garantirMatriz4D(q);
+
+  // ─── 4.14: persiste a matriz no localStorage após garantir ───
+  // _garantirMatriz4D popula q.matriz4D em memória mas não salva.
+  // Salvamos aqui pra que _marcarPendenteSync encontre a matriz ao sync.
+  if (ext.ok && Array.isArray(q.matriz4D)) {
+    const idxQ = DB.pesquisas.findIndex(x => x.id == q.id);
+    if (idxQ >= 0) DB.pesquisas[idxQ] = q;
+    saveDB('pesquisas', DB.pesquisas);
+    // Dispara sync ao banco (debounce — só envia se houver mudança real)
+    if (typeof window._marcarPendenteSync === 'function') window._marcarPendenteSync();
+  }
+
   if (!ext.ok) {
     m.innerHTML = `
       <div class="card" style="border:1px solid #f0b840;background:#2e2718">
