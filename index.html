@@ -5350,9 +5350,14 @@ function _refreshCotas() {
 
 // Atualiza contadores do dashboard
 function _refreshDashCounters() {
-  // Só recriar se a tela não tiver inputs focados
-  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
-  pgDash();
+  if (document.activeElement && ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) return;
+  // Se o dash já está renderizado, só atualiza o corpo (não recria os selects)
+  if (document.getElementById('dash-body')) {
+    DB.registros = loadDB('registros', []);
+    renderDash();
+  } else {
+    pgDash();
+  }
 }
 
 // Atualiza gestão sem perder foco
@@ -5421,16 +5426,89 @@ function renderDash() {
   const _todasAtivasDash = _filtrarPesquisasDoSupervisor(DB.pesquisas.filter(p=>p.ativa));
   const pesqs = qid ? _todasAtivasDash.filter(p=>p.id==qid) : _todasAtivasDash;
   const pRows = pesqs.map(p => {
-    const regsP = regs.filter(r=>r.pesquisa_id===p.id);
-    const v     = regsP.filter(r=>r.status===1).length;
-    const pct   = p.meta ? Math.min(100,Math.round(v/p.meta*100)) : 0;
-    return `<div style="margin-bottom:12px">
+    const regsP  = regs.filter(r => r.pesquisa_id === p.id);
+    const valP   = regsP.filter(r => r.status === 1 && r.origem !== 'ponderacao');
+    const v      = valP.length;
+    const pct    = p.meta ? Math.min(100, Math.round(v / p.meta * 100)) : 0;
+
+    // ── Card base com barra de progresso geral ──
+    let html = `<div style="margin-bottom:16px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;font-size:13px;margin-bottom:4px;gap:8px">
         <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${nomeQ(p)}</span>
         <span style="color:#c4cad8;flex-shrink:0;white-space:nowrap">${v} / ${p.meta||'—'} (${pct}%)</span>
       </div>
-      <div class="pb"><div class="pb-f" style="width:${pct}%"></div></div>
-    </div>`;
+      <div class="pb"><div class="pb-f" style="width:${pct}%"></div></div>`;
+
+    // ── Progresso da matriz cruzada (só para pesquisas cruzadas com matriz) ──
+    if (p.tipoCota === 'cruzado' && Array.isArray(p.matriz4D) && p.matriz4D.length > 0) {
+      const mapRegLoc = typeof _construirMapaRegLoc === 'function' ? _construirMapaRegLoc(p) : new Map();
+
+      // Conta entrevistas por célula
+      const celCount = {};
+      valP.forEach(r => {
+        const regUp = String(r.regiao || '').toUpperCase().trim();
+        const locR  = mapRegLoc.get(regUp) || regUp;
+        const sexR  = String(r.sexo || '').toUpperCase().trim();
+        const idaR  = String(r.faixa_etaria || r.idade || '').toUpperCase().trim();
+        const insR  = String(r.escolaridade || r.instrucao || '').toUpperCase().trim();
+        const cel   = p.matriz4D.find(c =>
+          _matchCota(locR, c.loc) && _matchCota(sexR, c.sexo) &&
+          _matchCota(idaR, c.idade) && _matchCota(insR, c.instrucao)
+        );
+        if (cel) {
+          const key = `${cel.loc}|${cel.sexo}|${cel.idade}|${cel.instrucao}`;
+          celCount[key] = (celCount[key] || 0) + 1;
+        }
+      });
+
+      // Agrupa por localização para mostrar em seções
+      const locais = [...new Set(p.matriz4D.filter(c => c.meta > 0).map(c => c.loc))];
+      const celComMeta = p.matriz4D.filter(c => c.meta > 0);
+      const totalCelulas = celComMeta.length;
+      const celCompletas = celComMeta.filter(c => {
+        const key = `${c.loc}|${c.sexo}|${c.idade}|${c.instrucao}`;
+        return (celCount[key] || 0) >= c.meta;
+      }).length;
+
+      html += `<div style="margin-top:10px">
+        <div style="font-size:11px;color:#8b95aa;margin-bottom:6px;display:flex;justify-content:space-between">
+          <span>Matriz cruzada — ${totalCelulas} células</span>
+          <span style="color:${celCompletas===totalCelulas?'#2dc98e':'#f0b840'}">${celCompletas}/${totalCelulas} completas</span>
+        </div>`;
+
+      // Mostra até 2 localidades — o resto colapsa
+      const locsVisiveis = locais.slice(0, 2);
+      locsVisiveis.forEach(loc => {
+        const celsDaLoc = celComMeta.filter(c => c.loc === loc);
+        html += `<div style="margin-bottom:8px">
+          <div style="font-size:11px;font-weight:700;color:#c4cad8;margin-bottom:4px">${loc}</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:3px">`;
+        celsDaLoc.forEach(c => {
+          const key    = `${c.loc}|${c.sexo}|${c.idade}|${c.instrucao}`;
+          const atual  = celCount[key] || 0;
+          const pctCel = Math.min(100, Math.round(atual / c.meta * 100));
+          const cor    = atual >= c.meta ? '#2dc98e' : atual > 0 ? '#f0b840' : '#444';
+          html += `<div title="${c.loc} · ${c.sexo} · ${c.idade} · ${c.instrucao}" style="background:#1a2035;border-radius:4px;padding:4px 6px;font-size:10px">
+            <div style="display:flex;justify-content:space-between;color:#8b95aa;margin-bottom:2px">
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${c.sexo} · ${c.idade}</span>
+              <span style="color:${cor};font-weight:700;flex-shrink:0">${atual}/${c.meta}</span>
+            </div>
+            <div style="height:3px;background:#2a3050;border-radius:2px">
+              <div style="height:3px;width:${pctCel}%;background:${cor};border-radius:2px;transition:width .3s"></div>
+            </div>
+          </div>`;
+        });
+        html += `</div></div>`;
+      });
+
+      if (locais.length > 2) {
+        html += `<div style="font-size:11px;color:#8b95aa;margin-top:4px">+ ${locais.length - 2} localidade(s) não exibidas</div>`;
+      }
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+    return html;
   }).join('');
 
   // Produção por operador
