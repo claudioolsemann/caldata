@@ -9628,6 +9628,20 @@ function pgRelatorio() {
           ${periodoHtml('rel', 'renderRelConfig();renderCruzSection()')}
         </div>
       </div>
+      <div class="row" style="margin-top:8px" id="rel-filtro-geo-row">
+        <div class="col">
+          <label>Filtrar por localidade</label>
+          <select id="rel-localidade" onchange="renderRelFiltroGeo();renderRelConfig();renderCruzSection()">
+            <option value="">Todas as localidades</option>
+          </select>
+        </div>
+        <div class="col" id="rel-bairro-col" style="display:none">
+          <label>Filtrar por bairro</label>
+          <select id="rel-bairro" onchange="renderRelConfig();renderCruzSection()">
+            <option value="">Todos os bairros</option>
+          </select>
+        </div>
+      </div>
       <div class="row" style="margin-top:8px">
         <div class="col">
           <label>Nome do instituto</label>
@@ -9809,6 +9823,61 @@ function salvarConfigRel() {
   salvarTudo(); toast('✓ Configurações salvas');
 }
 
+// ─── Preenche selects de localidade/bairro no relatório ───
+function renderRelFiltroGeo() {
+  const qid = document.getElementById('rel-q')?.value;
+  const q   = DB.pesquisas.find(x => x.id == qid);
+  const locSel  = document.getElementById('rel-localidade');
+  const baiSel  = document.getElementById('rel-bairro');
+  const baiCol  = document.getElementById('rel-bairro-col');
+  if (!locSel) return;
+
+  // Pega registros da pesquisa
+  const regs = DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1);
+
+  // Extrai localidades únicas dos registros
+  const locs = [...new Set(regs.map(r => (r.regiao || '').trim()).filter(Boolean))].sort();
+
+  const locAtual = locSel.value;
+  locSel.innerHTML = '<option value="">Todas as localidades</option>' +
+    locs.map(l => `<option value="${l}" ${l===locAtual?'selected':''}>${l}</option>`).join('');
+
+  // Se escolheu localidade, mostra bairros
+  const locEscolhida = locSel.value;
+  if (locEscolhida) {
+    const bairros = [...new Set(
+      regs.filter(r => (r.regiao||'').trim() === locEscolhida)
+          .map(r => (r.bairro || r.outras_dimensoes?.bairro || '').trim())
+          .filter(Boolean)
+    )].sort();
+    if (bairros.length > 0) {
+      const baiAtual = baiSel?.value || '';
+      baiSel.innerHTML = '<option value="">Todos os bairros</option>' +
+        bairros.map(b => `<option value="${b}" ${b===baiAtual?'selected':''}>${b}</option>`).join('');
+      if (baiCol) baiCol.style.display = '';
+    } else {
+      if (baiCol) baiCol.style.display = 'none';
+    }
+  } else {
+    if (baiCol) baiCol.style.display = 'none';
+    if (baiSel) baiSel.innerHTML = '<option value="">Todos os bairros</option>';
+  }
+}
+
+// ─── Filtra registros do relatório aplicando filtro geográfico ───
+function _relFiltrarGeo(regs) {
+  const loc = document.getElementById('rel-localidade')?.value || '';
+  const bai = document.getElementById('rel-bairro')?.value || '';
+  if (!loc) return regs;
+  let filtrados = regs.filter(r => (r.regiao || '').trim() === loc);
+  if (bai) {
+    filtrados = filtrados.filter(r =>
+      (r.bairro || r.outras_dimensoes?.bairro || '').trim() === bai
+    );
+  }
+  return filtrados;
+}
+
 function renderRelConfig() {
   DB.registros = loadDB('registros', []);
   const qid = document.getElementById('rel-q')?.value;
@@ -9820,6 +9889,9 @@ function renderRelConfig() {
   if (tipo==='reais') regs = regs.filter(r=>r.origem!=='ponderacao');
   const _pRel = getPeriodoFiltro('rel');
   regs = filtrarPorPeriodo(regs, _pRel.dtIni, _pRel.dtFim, _pRel.hrIni, _pRel.hrFim);
+  // ─── Filtro geográfico ───
+  renderRelFiltroGeo();
+  regs = _relFiltrarGeo(regs);
   // Normalizar respostas de idade para faixas etárias padrão
   const _qAtual = DB.pesquisas.find(x=>x.id==qid);
   regs = regs.map(r => {
@@ -10024,6 +10096,7 @@ function gerarRelatorio() {
   if (tipo==='reais') regs = regs.filter(r=>r.origem!=='ponderacao');
   const _pRelG = getPeriodoFiltro('rel');
   regs = filtrarPorPeriodo(regs, _pRelG.dtIni, _pRelG.dtFim, _pRelG.hrIni, _pRelG.hrFim);
+  regs = _relFiltrarGeo(regs);
   // Normalizar faixa_etaria (converter idades numéricas para faixas padrão)
   regs = regs.map(r => ({
     ...r,
