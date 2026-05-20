@@ -16058,6 +16058,19 @@ function finalizarE(){
   if (!_opAutorizado()) return;
   const demo = _coletarDemo();
 
+  // ── 4.15: Hidrata registros do banco antes de verificar cotas ──
+  // Garante contagem atualizada mesmo com múltiplos operadores ou entrevistas recentes.
+  if (typeof window._hidratarRegistrosDoBanco === 'function') {
+    window._hidratarRegistrosDoBanco(true).then(() => {
+      DB.registros = loadDB('registros', []);
+      _finalizarComVerif(demo);
+    }).catch(() => _finalizarComVerif(demo));
+    return;
+  }
+  _finalizarComVerif(demo);
+}
+
+function _finalizarComVerif(demo){
   // ── Verificação de cotas ──
   const cotasBloqueadas = verificarCotas(ePesquisa.id, demo);
   if (cotasBloqueadas.length > 0) {
