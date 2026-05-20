@@ -6713,15 +6713,21 @@ async function salvarQ() {
     toast('✓ Pesquisa salva no banco e localmente!');
 
     // ─── 4.12: sync de dims se cota cruzada ───
-    if (editandoQ.tipoCota === 'cruzado' && editandoQ.banco_id && Array.isArray(editandoQ.dims)) {
-      const qSalva = DB.pesquisas.find(q => q.id == editandoQ.id) || editandoQ;
-      editandoQ.dims.forEach(d => {
+    if (editandoQ.tipoCota === 'cruzado' && editandoQ.banco_id && Array.isArray(editandoQ.dims) && editandoQ.dims.length > 0) {
+      // Usa editandoQ diretamente — garante que as dims recém-editadas são usadas
+      // (DB.pesquisas pode ter sido atualizado com spread mas dims pode estar stale)
+      const qParaSync = { ...editandoQ };
+      console.log('[4.12] Sincronizando', qParaSync.dims.length, 'dims para pesquisa', qParaSync.banco_id);
+      for (const d of qParaSync.dims) {
         if (d && d.k) {
-          window._sincronizarDimensaoCotas(qSalva, d.k).catch(e =>
-            console.warn('[4.12] Falha ao sincronizar dim', d.k, e)
-          );
+          try {
+            const r = await window._sincronizarDimensaoCotas(qParaSync, d.k);
+            console.log('[4.12] Dim', d.k, r.ok ? '✓' : '❌ ' + r.error);
+          } catch (e) {
+            console.warn('[4.12] Falha ao sincronizar dim', d.k, e);
+          }
         }
-      });
+      }
     }
 
     document.getElementById('editor-q').innerHTML='';
