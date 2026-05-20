@@ -2728,6 +2728,22 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         if (error) return { ok:false, error: error.message };
         return { ok:true, data: data || [] };
       } catch(e) { return { ok:false, error: e.message }; }
+    },
+
+    // ─── deletarPorPonderacao ───
+    // Remove do banco todos os registros de uma ponderação pelo nome.
+    // Usa outras_dimensoes->>'ponderacao_nome' para filtrar.
+    async deletarPorPonderacao(pesquisa_id, ponderacao_nome) {
+      try {
+        const { data, error } = await supabaseClient
+          .from('registros')
+          .delete()
+          .eq('pesquisa_id', pesquisa_id)
+          .eq('outras_dimensoes->>origem', 'ponderacao')
+          .eq('outras_dimensoes->>ponderacao_nome', ponderacao_nome);
+        if (error) return { ok:false, error: error.message };
+        return { ok:true, data };
+      } catch(e) { return { ok:false, error: e.message }; }
     }
 
   };
@@ -14050,6 +14066,52 @@ function aplicarPonderacao(qid) {
   salvarTudo();
   toast(`✓ Ponderação aplicada! ${novos.length} registros criados.`);
   renderPonderacao();
+
+  // ─── Salvar registros de ponderação no banco ───
+  // Sem isso, a hidratação sobrescreve o localStorage e os registros somem.
+  if (window.registrosSb && novos.length > 0) {
+    const qObj = DB.pesquisas.find(x => x.id == qid);
+    const perguntas = qObj?.perguntas || [];
+    (async () => {
+      let ok = 0, falha = 0;
+      for (const reg of novos) {
+        // Converte respostas de {p.id → valor} para {var_cod → valor}
+        const respostasVarCod = {};
+        perguntas.forEach(p => {
+          const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+          if ((reg.respostas||{})[p.id] !== undefined) respostasVarCod[chave] = reg.respostas[p.id];
+          else if ((reg.respostas||{})[chave] !== undefined) respostasVarCod[chave] = reg.respostas[chave];
+        });
+        const payload = {
+          pesquisa_id: reg.pesquisa_id,
+          op_id: reg.op_id,
+          status: 1,
+          status_txt: 'BEM SUCEDIDA',
+          duracao_seg: reg.duracao_seg || 0,
+          telefone: reg.telefone || null,
+          telefone_fonte: reg.telefone_fonte || 'ponderacao',
+          telefone_id: reg.telefone_id || null,
+          sexo: reg.sexo || null,
+          idade: null,
+          faixa_etaria: reg.faixa_etaria || null,
+          escolaridade: reg.escolaridade || null,
+          renda: null,
+          regiao: reg.regiao || null,
+          outras_dimensoes: {
+            origem: 'ponderacao',
+            ponderacao_nome: reg.ponderacao_nome || nome,
+            id_original: reg.id_original || null
+          },
+          respostas: respostasVarCod,
+          dh: reg.dh || new Date().toISOString()
+        };
+        const r = await window.registrosSb.criarRegistro(payload);
+        if (r.ok) ok++; else { falha++; console.warn('[pond] falha ao salvar reg:', r.error); }
+      }
+      console.log(`[pond] ${ok} registros salvos no banco, ${falha} falhas`);
+      if (ok > 0) toast(`✓ ${ok} registros de ponderação sincronizados com o banco`);
+    })();
+  }
 }
 
 function excluirPonderacao(qid, idx) {
@@ -14063,6 +14125,17 @@ function excluirPonderacao(qid, idx) {
   salvarTudo();
   toast('Ponderação removida');
   renderPonderacao();
+
+  // ─── Remove do banco também ───
+  if (window.registrosSb) {
+    (async () => {
+      try {
+        const r = await window.registrosSb.deletarPorPonderacao(qid, p.nome);
+        if (r?.ok) console.log('[pond] registros removidos do banco:', p.nome);
+        else console.warn('[pond] falha ao remover do banco:', r?.error);
+      } catch(e) { console.warn('[pond] erro ao remover do banco:', e); }
+    })();
+  }
 }
 
 
