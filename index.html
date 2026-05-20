@@ -6620,6 +6620,11 @@ function addPerg() {
   if (!var_cod||!txt) { toast('Preencha código e texto da pergunta'); return; }
   if ((tipo==='unica'||tipo==='multipla')&&opts.length<2) { toast('Adicione ao menos 2 opções'); return; }
   if (!editandoQ.perguntas) editandoQ.perguntas = [];
+  // ─── Validação: var_cod único por pesquisa ───
+  if (editandoQ.perguntas.find(p => p.var_cod === var_cod)) {
+    toast('⚠ Código ' + var_cod + ' já existe nesta pesquisa — use um código único');
+    return;
+  }
   editandoQ.perguntas.push({id:'p_'+Date.now(), num:editandoQ.perguntas.length+1, var_cod, txt, tipo, opts, ic, cruzavel});
   atualizarListaPergs();
   document.getElementById('np-var').value='';
@@ -6727,7 +6732,14 @@ function toggleEpOpts(pid) {
 async function salvarEdicaoPerg(pid) {
   const p = (editandoQ.perguntas||[]).find(x => x.id === pid);
   if (!p) return;
-  p.var_cod = document.getElementById('ep_var_'+pid)?.value.trim() || p.var_cod;
+  const novoVarCod = document.getElementById('ep_var_'+pid)?.value.trim() || p.var_cod;
+  // ─── Validação: var_cod único por pesquisa ───
+  const duplicado = (editandoQ.perguntas||[]).find(x => x.id !== pid && x.var_cod === novoVarCod);
+  if (duplicado) {
+    toast('⚠ Código ' + novoVarCod + ' já existe na pergunta ' + duplicado.num + ' — use um código único');
+    return;
+  }
+  p.var_cod = novoVarCod;
   p.txt     = document.getElementById('ep_txt_'+pid)?.value.trim() || p.txt;
   p.ic      = document.getElementById('ep_ic_'+pid)?.value.trim() || '';
   p.tipo    = document.getElementById('ep_tipo_'+pid)?.value || p.tipo;
@@ -10964,7 +10976,12 @@ function exportTodosXPerfilExcel() {
       });
       const totRow = ['TOTAL',100,n,...cols.map(({cr,col})=>_cntDim(regs,cr.k,col))];
       data.push(totRow);
-      aplicarEstiloExcel(XLSX, wb, data, perg.var_cod.slice(0,31));
+      // Nome da aba único — var_cod + índice se duplicado
+      let abaName = String(perg.var_cod || perg.id).slice(0,28);
+      let abaFinal = abaName;
+      let abaIdx = 2;
+      while (wb.SheetNames.includes(abaFinal)) { abaFinal = abaName.slice(0,25) + '_' + abaIdx++; }
+      aplicarEstiloExcel(XLSX, wb, data, abaFinal);
     });
     XLSX.writeFile(wb, `cruzamentos_${q.nome.replace(/\W+/g,'_').slice(0,30)}.xlsx`);
     toast('✓ Excel com todos os cruzamentos exportado!');
