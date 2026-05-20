@@ -1587,6 +1587,58 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     return r;
   };
 
+  // ─── 4.14: Sync da matriz4D após editar metas na aba Cotas ───────────────
+  // Chamada por salvarCelulaMatriz e salvarTransbordoPadrao.
+  // Debounce de 1.5s — evita chamada a cada tecla no input de meta.
+  window._marcarPendenteSync = function() {
+    // Descobre qual pesquisa está ativa na aba Cotas
+    const qidEl = document.getElementById('cota-q-sel');
+    if (!qidEl) return;
+    const qid = qidEl.value;
+    const q = DB.pesquisas.find(x => String(x.id) === String(qid) || String(x.banco_id) === String(qid));
+    if (!q || !q.banco_id || !Array.isArray(q.matriz4D)) return;
+
+    const chave = 'matriz4D:' + q.banco_id;
+    if (window._marcarPendenteSync._timers) {
+      clearTimeout(window._marcarPendenteSync._timers[chave]);
+    } else {
+      window._marcarPendenteSync._timers = {};
+    }
+
+    window._marcarPendenteSync._timers[chave] = setTimeout(async () => {
+      if (!window.pesquisaSb || !window._syncStatus) return;
+      window._syncStatus.emAndamento++;
+      window._atualizarStatusSync();
+      const r = await window.pesquisaSb.atualizarPesquisa(q.banco_id, {
+        codigo: q.codigo || '',
+        nome: q.nome,
+        cidade: q.cidade || '',
+        meta: parseInt(q.meta) || 0,
+        ativa: q.ativa !== false,
+        abordagem: q.abordagem || '',
+        encerramento: q.encerramento || '',
+        tipoCota: q.tipoCota || 'marginal',
+        matriz4D: q.matriz4D,
+        transbordoCruzado: q.transbordoCruzado ?? 10
+      });
+      window._syncStatus.emAndamento = Math.max(0, window._syncStatus.emAndamento - 1);
+      if (r.ok) {
+        console.log('[4.14] matriz4D sincronizada —', q.matriz4D.length, 'células');
+        window._syncStatus.ultimoErro = null;
+        window._syncStatus.ultimoOk = Date.now();
+        if (typeof window._marcarMinhaMudanca === 'function') {
+          window._marcarMinhaMudanca('pesquisas', q.banco_id);
+        }
+        if (window._syncStatus.timerLimpar) clearTimeout(window._syncStatus.timerLimpar);
+        window._syncStatus.timerLimpar = setTimeout(() => window._atualizarStatusSync(), 2100);
+      } else {
+        console.error('[4.14] Falha ao sincronizar matriz4D:', r.error);
+        window._syncStatus.ultimoErro = r.error || 'erro desconhecido';
+      }
+      window._atualizarStatusSync();
+    }, 1500);
+  };
+
   // Sistema de debounce: agenda sync e cancela o anterior pra mesma chave
   window._agendarSyncDebounce = function(chave, fn, delayMs) {
     delayMs = delayMs || 800;
