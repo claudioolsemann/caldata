@@ -898,20 +898,9 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     // Função que dispara um pulso
     const pulsar = async () => {
       try {
-        // Determina o questionário ativo nesta sessão
-        const _getPesquisaAtiva = () => {
-          if (typeof ePesquisa !== 'undefined' && ePesquisa && ePesquisa.id) return Number(ePesquisa.id);
-          const qEl = document.getElementById('op-q-sel');
-          if (qEl && qEl.value) return parseInt(qEl.value) || null;
-          const op = (typeof DB !== 'undefined' ? DB.operadores : []).find(o => o.id == opId);
-          return op && op.pesquisa_id ? Number(op.pesquisa_id) : null;
-        };
-        const pesquisaAtiva = _getPesquisaAtiva();
-
         const { data, error } = await supabaseClient.rpc('heartbeat_sessao', {
           p_op_id: opId,
-          p_token: token,
-          ...(pesquisaAtiva ? { p_pesquisa_id: pesquisaAtiva } : {})
+          p_token: token
         });
         if (error) {
           // Erro de rede — não derruba, só loga (próximo heartbeat tenta de novo)
@@ -4478,8 +4467,7 @@ function pgAoVivo() {
             ultimoLogin: o.ultimo_login,
             sessao_token: o.sessao_token || null,
             sessao_inicio: o.sessao_inicio || null,
-            sessao_heartbeat: o.sessao_heartbeat || null,
-            sessao_pesquisa_id: o.sessao_pesquisa_id ? Number(o.sessao_pesquisa_id) : null
+            sessao_heartbeat: o.sessao_heartbeat || null
           }));
         }
       }
@@ -4516,38 +4504,21 @@ function renderAoVivo() {
     if (filtroQ) regsHoje = regsHoje.filter(r=>r.pesquisa_id==filtroQ);
     const todosHoje = DB.registros.filter(r=>r.op_id===op.id&&r.dh.startsWith(hoje));
     const ultimo = todosHoje.sort((a,b)=>b.dh.localeCompare(a.dh))[0];
+    const qAtivo = ultimo ? DB.pesquisas.find(p=>p.id===ultimo.pesquisa_id)
+                          : (op.pesquisa_id ? DB.pesquisas.find(p=>p.id===op.pesquisa_id) : null);
 
-    // Heartbeat calculado antes do filtro — usado tanto no filtro quanto no qAtivo
-    const heartbeat  = op.sessao_heartbeat ? new Date(op.sessao_heartbeat) : null;
-    const hbMin      = heartbeat ? Math.round((agora-heartbeat)/60000) : null;
-    const ultimaAtiv = ultimo ? new Date(ultimo.dh) : null;
-    const minAtras   = ultimaAtiv ? Math.round((agora-ultimaAtiv)/60000) : null;
-    const online     = (minAtras !== null && minAtras <= 30) || (hbMin !== null && hbMin <= 2);
-
-    // Se filtroQ: mantém op se trabalhou nesse Q hoje, ou está online nesse Q agora
-    if (filtroQ && !regsHoje.length && !todosHoje.some(r=>r.pesquisa_id==filtroQ)) {
-      const onlineNesteQ = hbMin !== null && hbMin <= 2 && String(op.sessao_pesquisa_id) === String(filtroQ);
-      const atribuidoNesteQ = String(op.pesquisa_id) === String(filtroQ);
-      if (!onlineNesteQ && !atribuidoNesteQ) return null;
-    }
+    // Se filtroQ e o operador não trabalhou nesse Q hoje, pula
+    if (filtroQ && !regsHoje.length && !todosHoje.some(r=>r.pesquisa_id==filtroQ)) return null;
 
     const validas  = regsHoje.filter(r=>r.status===1).length;
     const recusas  = regsHoje.filter(r=>[2,3,4,5,6,7,14].includes(r.status)).length;
     const total    = regsHoje.length;
-
-    // Questionário ativo — prioridade definitiva:
-    // 1. sessao_pesquisa_id: gravado pelo heartbeat, reflete o Q real desta sessão
-    // 2. último registro do dia: Q em que o op efetivamente trabalhou hoje
-    // 3. pesquisa_id: atribuição do admin (fallback)
-    const qAtivo = (() => {
-      if (hbMin !== null && hbMin <= 2 && op.sessao_pesquisa_id)
-        return DB.pesquisas.find(p => p.id === op.sessao_pesquisa_id) || null;
-      if (ultimo)
-        return DB.pesquisas.find(p => p.id === ultimo.pesquisa_id) || null;
-      if (op.pesquisa_id)
-        return DB.pesquisas.find(p => p.id == op.pesquisa_id) || null;
-      return null;
-    })();
+    const ultimaAtiv = ultimo ? new Date(ultimo.dh) : null;
+    const minAtras   = ultimaAtiv ? Math.round((agora-ultimaAtiv)/60000) : null;
+    // Online por registro recente OU por heartbeat de sessão ativo (≤ 2 min)
+    const heartbeat  = op.sessao_heartbeat ? new Date(op.sessao_heartbeat) : null;
+    const hbMin      = heartbeat ? Math.round((agora-heartbeat)/60000) : null;
+    const online     = (minAtras !== null && minAtras <= 30) || (hbMin !== null && hbMin <= 2);
 
     // Pausa ativa?
     const pausasOp = (DB.pausas||[]).filter(p=>p.op_id===op.id&&!p.fim);
@@ -17078,17 +17049,35 @@ async function encerrarPausa(silencioso) {
   salvarTudo();
 
   // ─── FASE 4 SUB-3: encerra pausa no banco ───
-  // Não bloqueia a UI — toast já apareceu, segue render. Se falhar, próxima
-  // hidratação vai trazer o estado correto do banco.
+  // FIX: antes o .catch(()=>{}) engolia erros silenciosamente — o front-end
+  // mostrava "Pausa encerrada" mas o banco ficava com fim = NULL, causando
+  // a pausa aparecer travada no "Ao vivo" indefinidamente.
+  // Agora: se a RPC falhar, tenta até 3 vezes com backoff de 2s. Se persistir,
+  // mostra aviso para o operador e mantém o estado local correto.
   if (pausaAtiva.banco_id && window.pausasSb) {
-    window.pausasSb.encerrarPausa({
-      pausa_id: pausaAtiva.banco_id,
-      encerrada_por: 'operador',
-      admin_id: null
-    }).then(r => {
-      if (r.ok) console.log('[fase4-sub3] Pausa encerrada no banco, duração:', r.data.duracao_seg + 's');
-      else console.warn('[fase4-sub3] Falha ao encerrar pausa no banco:', r.error);
-    }).catch(()=>{});
+    const _pausaIdParaEncerrar = pausaAtiva.banco_id;
+    const _duracaoSeg = pausaSegundos;
+    const _tentarEncerrar = async (tentativa) => {
+      try {
+        const r = await window.pausasSb.encerrarPausa({
+          pausa_id: _pausaIdParaEncerrar,
+          encerrada_por: 'operador',
+          admin_id: null
+        });
+        if (r.ok) {
+          console.log('[fase4-sub3] Pausa encerrada no banco, duração:', r.data?.duracao_seg + 's');
+        } else {
+          console.warn('[fase4-sub3] RPC encerrar_pausa retornou erro (tentativa ' + tentativa + '):', r.error);
+          if (tentativa < 3) setTimeout(() => _tentarEncerrar(tentativa + 1), 2000 * tentativa);
+          else toast('⚠ Não foi possível registrar o encerramento da pausa no servidor. Avise o administrador.');
+        }
+      } catch (e) {
+        console.warn('[fase4-sub3] Exceção ao encerrar pausa (tentativa ' + tentativa + '):', e.message || e);
+        if (tentativa < 3) setTimeout(() => _tentarEncerrar(tentativa + 1), 2000 * tentativa);
+        else toast('⚠ Erro de conexão ao encerrar pausa. Avise o administrador.');
+      }
+    };
+    _tentarEncerrar(1);
   }
 
   if (!silencioso) toast(`✓ Pausa encerrada — ${fmtSeg(pausaSegundos)}`);
