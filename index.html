@@ -4450,15 +4450,38 @@ function pgAoVivo() {
   aoVivoTimer = setInterval(async () => {
     if (window._tabAtual !== 'aovivo') { clearInterval(aoVivoTimer); aoVivoTimer = null; return; }
     try {
+      // Recarrega operadores do banco — atualiza sessao_heartbeat em tempo real
+      if (supabaseClient) {
+        const { data: opsData } = await supabaseClient.rpc('listar_operadores');
+        if (opsData) {
+          DB.operadores = opsData.map(o => ({
+            id: o.id, nome: o.nome, login: o.login, senha: '••••',
+            perfil: o.perfil, ativo: o.ativo, habilitado: true, email: o.email,
+            pesquisa_id: o.pesquisa_id,
+            pesquisas_ids: (() => {
+              let ids = o.pesquisas_ids;
+              if (typeof ids === 'string') ids = ids.replace(/[{}]/g,'').split(',').map(s=>s.trim()).filter(Boolean);
+              if (Array.isArray(ids) && ids.length) return ids.map(Number).filter(n=>!isNaN(n));
+              return o.pesquisa_id ? [Number(o.pesquisa_id)] : [];
+            })(),
+            ultimoLogin: o.ultimo_login,
+            sessao_token: o.sessao_token || null,
+            sessao_inicio: o.sessao_inicio || null,
+            sessao_heartbeat: o.sessao_heartbeat || null
+          }));
+        }
+      }
+    } catch(e) { /* mantém DB.operadores que já tinha */ }
+    try {
       if (typeof window._hidratarRegistrosDoBanco === 'function') {
-        const r = await window._hidratarRegistrosDoBanco(true);  // forcar=true (ignora cache 10s)
+        const r = await window._hidratarRegistrosDoBanco(true);
         if (r.ok && r.fonte === 'banco') {
           window._pgUsarRegistrosEmMemoria = true;
         }
       }
     } catch(e) { /* mantém DB.registros que já tinha */ }
     renderAoVivo();
-  }, 15000);
+  }, 10000);
 }
 
 function renderAoVivo() {
