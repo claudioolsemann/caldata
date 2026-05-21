@@ -900,12 +900,9 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       try {
         // Determina o questionário ativo nesta sessão
         const _getPesquisaAtiva = () => {
-          // 1ª opção: ePesquisa em memória (operador está em entrevista ou painel ativo)
           if (typeof ePesquisa !== 'undefined' && ePesquisa && ePesquisa.id) return Number(ePesquisa.id);
-          // 2ª opção: campo hidden no painel do operador (op-q-sel)
           const qEl = document.getElementById('op-q-sel');
           if (qEl && qEl.value) return parseInt(qEl.value) || null;
-          // 3ª opção: pesquisa_id do operador em memória (atribuição do admin)
           const op = (typeof DB !== 'undefined' ? DB.operadores : []).find(o => o.id == opId);
           return op && op.pesquisa_id ? Number(op.pesquisa_id) : null;
         };
@@ -1062,9 +1059,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         // ─── FASE 4 EXTRA: campos de sessão (multi-login) ───
         sessao_token: o.sessao_token || null,
         sessao_inicio: o.sessao_inicio || null,
-        sessao_heartbeat: o.sessao_heartbeat || null,
-        // Questionário ativo nesta sessão (gravado pelo heartbeat — separado da atribuição do admin)
-        sessao_pesquisa_id: o.sessao_pesquisa_id ? Number(o.sessao_pesquisa_id) : null
+        sessao_heartbeat: o.sessao_heartbeat || null
       }));
       // PERSISTE no localStorage também — sem isso, leitores que fazem
       // loadDB('operadores', []) (como _opAutorizado) pegam dados velhos
@@ -4522,14 +4517,14 @@ function renderAoVivo() {
     const todosHoje = DB.registros.filter(r=>r.op_id===op.id&&r.dh.startsWith(hoje));
     const ultimo = todosHoje.sort((a,b)=>b.dh.localeCompare(a.dh))[0];
 
-    // Heartbeat calculado antes do filtro pois é usado tanto no filtro quanto no qAtivo
+    // Heartbeat calculado antes do filtro — usado tanto no filtro quanto no qAtivo
     const heartbeat  = op.sessao_heartbeat ? new Date(op.sessao_heartbeat) : null;
     const hbMin      = heartbeat ? Math.round((agora-heartbeat)/60000) : null;
     const ultimaAtiv = ultimo ? new Date(ultimo.dh) : null;
     const minAtras   = ultimaAtiv ? Math.round((agora-ultimaAtiv)/60000) : null;
     const online     = (minAtras !== null && minAtras <= 30) || (hbMin !== null && hbMin <= 2);
 
-    // Se filtroQ: mantém op se trabalhou nesse Q hoje, OU se está online nesse Q agora (via sessão)
+    // Se filtroQ: mantém op se trabalhou nesse Q hoje, ou está online nesse Q agora
     if (filtroQ && !regsHoje.length && !todosHoje.some(r=>r.pesquisa_id==filtroQ)) {
       const onlineNesteQ = hbMin !== null && hbMin <= 2 && String(op.sessao_pesquisa_id) === String(filtroQ);
       const atribuidoNesteQ = String(op.pesquisa_id) === String(filtroQ);
@@ -4540,10 +4535,10 @@ function renderAoVivo() {
     const recusas  = regsHoje.filter(r=>[2,3,4,5,6,7,14].includes(r.status)).length;
     const total    = regsHoje.length;
 
-    // Questionário ativo: prioridade definitiva
-    // 1. sessao_pesquisa_id: gravado pelo heartbeat — reflete o Q real desta sessão
-    // 2. último registro do dia: o Q em que o op efetivamente registrou algo hoje
-    // 3. pesquisa_id: atribuição fixa do admin (fallback quando op está online mas sem registro)
+    // Questionário ativo — prioridade definitiva:
+    // 1. sessao_pesquisa_id: gravado pelo heartbeat, reflete o Q real desta sessão
+    // 2. último registro do dia: Q em que o op efetivamente trabalhou hoje
+    // 3. pesquisa_id: atribuição do admin (fallback)
     const qAtivo = (() => {
       if (hbMin !== null && hbMin <= 2 && op.sessao_pesquisa_id)
         return DB.pesquisas.find(p => p.id === op.sessao_pesquisa_id) || null;
@@ -4553,6 +4548,8 @@ function renderAoVivo() {
         return DB.pesquisas.find(p => p.id == op.pesquisa_id) || null;
       return null;
     })();
+
+    // Pausa ativa?
     const pausasOp = (DB.pausas||[]).filter(p=>p.op_id===op.id&&!p.fim);
     const pausaAtv = pausasOp.sort((a,b)=>b.inicio.localeCompare(a.inicio))[0]||null;
     const pausaSeg = pausaAtv ? Math.round((agora-new Date(pausaAtv.inicio))/1000) : 0;
