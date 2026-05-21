@@ -3686,8 +3686,10 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     <div class="m-title">Editar operador</div>
     <input type="hidden" id="edit-id">
     <label>Nome completo</label><input id="edit-nome">
-    <label>Nova senha <span style="font-weight:400;color:#aaa">(deixe vazio para manter)</span></label>
-    <input id="edit-senha" type="password" placeholder="Nova senha">
+    <div id="edit-senha-wrap">
+      <label>Nova senha <span style="font-weight:400;color:#aaa">(deixe vazio para manter)</span></label>
+      <input id="edit-senha" type="password" placeholder="Nova senha">
+    </div>
     <label>Perfil</label>
     <select id="edit-perfil">
       <option value="operador">Operador</option>
@@ -5455,21 +5457,27 @@ function pgDash() {
   DB.pausas     = loadDB('pausas',     []);
   clearInterval(aoVivoTimer); aoVivoTimer = null;
   const todas = _filtrarPesquisasDoSupervisor(DB.pesquisas);
+  const hojeISO = new Date().toISOString().slice(0,10);
   const qOpts = '<option value="">Todas as pesquisas</option>' + todas.map(q=>`<option value="${q.id}">${nomeQ(q)}${q.ativa?'':' (inativa)'}</option>`).join('');
   document.getElementById('adm-main').innerHTML = `
     <div class="card" style="margin-bottom:1rem">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <div style="flex:1;min-width:180px">
+        <div style="flex:2;min-width:180px">
           <label style="margin-top:0">Questionário</label>
           <select id="dash-q-sel" onchange="renderDash()" style="font-size:14px;font-weight:700">${qOpts}</select>
         </div>
         <div style="flex:1;min-width:120px">
-          <label style="margin-top:0">Período</label>
-          <select id="dash-per-sel" onchange="renderDash()">
-            <option value="hoje">Hoje</option>
-            <option value="semana">Esta semana</option>
-            <option value="total" selected>Total geral</option>
-          </select>
+          <label style="margin-top:0">De</label>
+          <input type="date" id="dash-data-ini" value="" onchange="renderDash()" style="width:100%;padding:7px 8px;background:#1a2030;border:1.5px solid #3a4560;border-radius:7px;color:#f0f2f8;font-family:inherit;font-size:13px">
+        </div>
+        <div style="flex:1;min-width:120px">
+          <label style="margin-top:0">Até</label>
+          <input type="date" id="dash-data-fim" value="${hojeISO}" onchange="renderDash()" style="width:100%;padding:7px 8px;background:#1a2030;border:1.5px solid #3a4560;border-radius:7px;color:#f0f2f8;font-family:inherit;font-size:13px">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;padding-top:18px">
+          <button onclick="_dashFiltroHoje()" class="btn btn-sm" style="font-size:11px;padding:4px 8px">Hoje</button>
+          <button onclick="_dashFiltro7d()" class="btn btn-sm" style="font-size:11px;padding:4px 8px">7 dias</button>
+          <button onclick="_dashFiltroTotal()" class="btn btn-sm" style="font-size:11px;padding:4px 8px">Total</button>
         </div>
       </div>
     </div>
@@ -5477,16 +5485,40 @@ function pgDash() {
   renderDash();
 }
 
+function _dashFiltroHoje() {
+  const hoje = new Date().toISOString().slice(0,10);
+  const ini = document.getElementById('dash-data-ini');
+  const fim = document.getElementById('dash-data-fim');
+  if (ini) ini.value = hoje;
+  if (fim) fim.value = hoje;
+  renderDash();
+}
+function _dashFiltro7d() {
+  const hoje = new Date().toISOString().slice(0,10);
+  const ini7 = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+  const ini = document.getElementById('dash-data-ini');
+  const fim = document.getElementById('dash-data-fim');
+  if (ini) ini.value = ini7;
+  if (fim) fim.value = hoje;
+  renderDash();
+}
+function _dashFiltroTotal() {
+  const ini = document.getElementById('dash-data-ini');
+  const fim = document.getElementById('dash-data-fim');
+  if (ini) ini.value = '';
+  if (fim) fim.value = '';
+  renderDash();
+}
+
 function renderDash() {
   const qid    = document.getElementById('dash-q-sel')?.value;
-  const period = document.getElementById('dash-per-sel')?.value || 'total';
-  const hoje   = new Date().toISOString().slice(0,10);
-  const semana = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+  const dataIni = document.getElementById('dash-data-ini')?.value || '';
+  const dataFim = document.getElementById('dash-data-fim')?.value || '';
 
   let regs = [...DB.registros];
   if (qid) regs = regs.filter(r => r.pesquisa_id == qid);
-  if (period==='hoje')  regs = regs.filter(r => r.dh.startsWith(hoje));
-  if (period==='semana') regs = regs.filter(r => r.dh.slice(0,10) >= semana);
+  if (dataIni) regs = regs.filter(r => r.dh && r.dh.slice(0,10) >= dataIni);
+  if (dataFim) regs = regs.filter(r => r.dh && r.dh.slice(0,10) <= dataFim);
 
   const validas  = regs.filter(r=>r.status===1).length;
   const recusas  = regs.filter(r=>[2,3,4,5,6,7,14].includes(r.status)).length;
@@ -5798,13 +5830,14 @@ function _renderPgOperadores() {
       </table>
     </div>
     <div style="font-size:12px;color:#c4cad8;margin-bottom:1rem">💡 "Questionário fixo" define qual pesquisa o operador abre automaticamente ao entrar. Deixe "Livre" para ele escolher.</div>
+    ${_ehMaster() ? `
     <div class="card" style="background:rgba(255,77,0,.12);border-color:rgba(255,77,0,.3)">
-      <div style="font-size:13px;font-weight:700;color:#FF7A40;margin-bottom:6px">Senha do administrador</div>
+      <div style="font-size:13px;font-weight:700;color:#FF7A40;margin-bottom:6px">🔐 Senha do administrador <span style="font-size:11px;font-weight:400;color:#8b95aa">(somente admin master)</span></div>
       <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
         <div style="flex:1;min-width:180px"><label style="margin-top:0">Nova senha</label><input type="password" id="nova-senha-admin" placeholder="Nova senha"></div>
         <button class="btn btn-sm" style="margin-bottom:1px" onclick="trocarSenhaAdmin()">Alterar</button>
       </div>
-    </div>
+    </div>` : ''}
     <div class="card" style="background:rgba(55,138,221,.1);border-color:rgba(55,138,221,.3)">
       <div style="font-size:13px;font-weight:700;color:#7ec3f0;margin-bottom:8px">🔗 Link de acesso para operadores</div>
       <div style="background:#1e2433;border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
@@ -5917,6 +5950,10 @@ function abrirEditOp(id) {
   document.getElementById('edit-nome').value = op.nome;
   document.getElementById('edit-senha').value = '';
 
+  // Campo de senha só visível para admin_master
+  const senhaWrap = document.getElementById('edit-senha-wrap');
+  if (senhaWrap) senhaWrap.style.display = _ehMaster() ? 'block' : 'none';
+
   // Popula select de perfil dinamicamente
   const sel = document.getElementById('edit-perfil');
   sel.innerHTML = '<option value="operador">Operador</option><option value="supervisor">Supervisor</option>';
@@ -5935,7 +5972,7 @@ async function salvarEditOp() {
   if (!_exigirAdmin('editar operador')) return;
   const id    = document.getElementById('edit-id').value;
   const nome  = document.getElementById('edit-nome').value.trim();
-  const senha = document.getElementById('edit-senha').value;
+  const senha = _ehMaster() ? document.getElementById('edit-senha').value : '';
   const perfil= document.getElementById('edit-perfil').value;
   if (!nome) { toast('Informe o nome'); return; }
   const op = DB.operadores.find(o => o.id == id);
@@ -11482,21 +11519,31 @@ function exportResultadosPDF() {
 function pgTelefones() {
   const m = document.getElementById('adm-main');
   // Mostra estrutura inicial com placeholder enquanto carrega do banco
+  const qOptsTel = '<option value="">— Nenhuma (sem vínculo) —</option>' +
+    _filtrarPesquisasDoSupervisor(DB.pesquisas).map(q => {
+      const cod = q.codigo ? `[${q.codigo}] ` : '';
+      return `<option value="${q.id}">${cod}${q.nome}</option>`;
+    }).join('');
+
   m.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:8px">
       <div style="font-size:15px;font-weight:800;color:#f0f2f8">📞 Bases de Telefones <span id="bases-count" style="color:#8b95aa;font-weight:600">(carregando…)</span></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <label class="btn" style="cursor:pointer;margin:0;background:#1d9e75;border-color:#2dc98e;color:#fff;font-weight:700" title="Aceita apenas números com 11 dígitos (DDD + 9 + 8)">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <div style="display:flex;flex-direction:column;gap:3px">
+          <label style="font-size:10px;font-weight:700;color:#8b95aa;text-transform:uppercase;letter-spacing:.06em">Vincular à pesquisa</label>
+          <select id="tel-pesq-import" style="padding:6px 10px;background:#1a2030;border:1.5px solid #3a5da8;border-radius:7px;color:#7eb6ff;font-family:inherit;font-size:12px;font-weight:700;min-width:200px">${qOptsTel}</select>
+        </div>
+        <label class="btn" style="cursor:pointer;margin:0;background:#1d9e75;border-color:#2dc98e;color:#fff;font-weight:700;align-self:flex-end" title="Aceita apenas números com 11 dígitos (DDD + 9 + 8)">
           📱 Importar Celular
           <input type="file" id="inp-tel-cel" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="importarTelefones(this, 'celular')">
         </label>
-        <label class="btn" style="cursor:pointer;margin:0;background:#2d6cbf;border-color:#60a8e8;color:#fff;font-weight:700" title="Aceita apenas números com 10 dígitos (DDD + 8)">
+        <label class="btn" style="cursor:pointer;margin:0;background:#2d6cbf;border-color:#60a8e8;color:#fff;font-weight:700;align-self:flex-end" title="Aceita apenas números com 10 dígitos (DDD + 8)">
           ☎ Importar Fixo
           <input type="file" id="inp-tel-fix" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="importarTelefones(this, 'fixo')">
         </label>
-        <button class="btn btn-sm" style="color:#f0b840;border-color:#8a6a1f;background:transparent" onclick="abrirPainelContadores()" title="Ver totais por pesquisa, cidade, bairro, tipo">📊 Contadores</button>
-        <button class="btn btn-sm" style="color:#f07070;border-color:#8a3a3a;background:transparent" onclick="abrirBlacklist()" title="Gerenciar blacklist global de telefones bloqueados">🚫 Blacklist</button>
-        <button class="btn btn-sm" style="color:#7eb6ff;border-color:#3a5da8" onclick="recarregarBasesDoBanco()" title="Recarregar do banco">🔄 Recarregar</button>
+        <button class="btn btn-sm" style="color:#f0b840;border-color:#8a6a1f;background:transparent;align-self:flex-end" onclick="abrirPainelContadores()" title="Ver totais por pesquisa, cidade, bairro, tipo">📊 Contadores</button>
+        <button class="btn btn-sm" style="color:#f07070;border-color:#8a3a3a;background:transparent;align-self:flex-end" onclick="abrirBlacklist()" title="Gerenciar blacklist global de telefones bloqueados">🚫 Blacklist</button>
+        <button class="btn btn-sm" style="color:#7eb6ff;border-color:#3a5da8;align-self:flex-end" onclick="recarregarBasesDoBanco()" title="Recarregar do banco">🔄 Recarregar</button>
       </div>
     </div>
 
@@ -11550,19 +11597,45 @@ async function _renderBasesList() {
   const cnt = document.getElementById('bases-count');
   if (cnt) cnt.textContent = `(${total})`;
 
+  // ── Filtro por questionário ──
+  const filtQid = window._basesFiltroQid || '';
+  const basesFiltradas = filtQid
+    ? basesBanco.filter(b => String(b.pesquisa_id||'') === String(filtQid))
+    : basesBanco;
+
+  // Monta select de filtro
+  const qOptsFiltro = '<option value="">— Todas as pesquisas —</option>' +
+    _filtrarPesquisasDoSupervisor(DB.pesquisas).map(q => {
+      const cod = q.codigo ? `[${q.codigo}] ` : '';
+      const sel = String(q.id) === String(filtQid) ? ' selected' : '';
+      return `<option value="${q.id}"${sel}>${cod}${q.nome.slice(0,50)}</option>`;
+    }).join('');
+
+  const filtroHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+      <label style="font-size:11px;font-weight:700;color:#8b95aa;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap">Filtrar por pesquisa</label>
+      <select onchange="window._basesFiltroQid=this.value;_renderBasesList()"
+        style="padding:6px 10px;background:#1a2030;border:1.5px solid #3a4560;border-radius:7px;color:#f0f2f8;font-family:inherit;font-size:12px;min-width:200px">
+        ${qOptsFiltro}
+      </select>
+      ${filtQid ? `<span style="font-size:11px;color:#8b95aa">${basesFiltradas.length} base(s) encontrada(s)</span>` : ''}
+    </div>`;
+
   // Mensagem se banco offline
   let avisoBanco = '';
   if (!bancoOk) {
     avisoBanco = `<div class="al-warn" style="margin-bottom:10px">⚠ Banco offline — mostrando apenas bases locais antigas.</div>`;
   }
 
-  // Cards das bases do banco
-  const cardsBanco = basesBanco.map(b => _renderCardBaseBanco(b)).join('');
-  // Cards das bases antigas (locais)
-  const cardsLocais = basesLocais.map(b => _renderCardBaseLocal(b)).join('');
+  // Cards das bases do banco (filtradas)
+  const cardsBanco = basesFiltradas.map(b => _renderCardBaseBanco(b)).join('');
+  // Cards das bases antigas (locais) — sem filtro de pesquisa (não têm pesquisa_id)
+  const cardsLocais = filtQid ? '' : basesLocais.map(b => _renderCardBaseLocal(b)).join('');
 
-  let html = avisoBanco + cardsBanco + cardsLocais;
-  if (!html) html = '<div class="al-info">Nenhuma base importada ainda. Clique em <strong>⬆ Importar Excel / CSV</strong> para começar.</div>';
+  let html = avisoBanco + filtroHTML + cardsBanco + cardsLocais;
+  if (!cardsBanco && !cardsLocais) {
+    html += `<div class="al-info">${filtQid ? 'Nenhuma base vinculada a esta pesquisa.' : 'Nenhuma base importada ainda. Clique em <strong>⬆ Importar Excel / CSV</strong> para começar.'}</div>`;
+  }
   cont.innerHTML = html;
 }
 
@@ -11759,6 +11832,10 @@ function importarTelefones(input, tipoEsperado) {
   if (tipoEsperado !== 'celular' && tipoEsperado !== 'fixo') {
     toast('Tipo de importação inválido'); return;
   }
+  // Captura pesquisa selecionada no select de vínculo
+  const pesqIdImport = document.getElementById('tel-pesq-import')?.value || '';
+  window._telPesqIdImport = pesqIdImport || null;
+
   const prev = document.getElementById('tel-preview');
   prev.innerHTML = '<div class="al-info">Lendo arquivo...</div>';
 
@@ -11983,7 +12060,10 @@ function processarLinhasTel(linhas, nomeArq, tipoEsperado) {
       <label style="margin-top:12px">Vincular à pesquisa <span style="color:#f07070">*</span></label>
       <select id="tel-pesq" required>
         <option value="">— Selecione a pesquisa —</option>
-        ${_filtrarPesquisasDoSupervisor(DB.pesquisas).filter(p=>p.ativa && p.banco_id).map(p=>`<option value="${p.banco_id}">${(p.codigo?'['+p.codigo+'] ':'')+p.nome.slice(0,60)}</option>`).join('')}
+        ${_filtrarPesquisasDoSupervisor(DB.pesquisas).filter(p=>p.ativa && p.banco_id).map(p=>{
+          const presel = window._telPesqIdImport && String(p.id) === String(window._telPesqIdImport) ? ' selected' : '';
+          return `<option value="${p.banco_id}"${presel}>${(p.codigo?'['+p.codigo+'] ':'')+p.nome.slice(0,60)}</option>`;
+        }).join('')}
       </select>
       <div style="font-size:11px;color:#8b95aa;margin-top:4px">A base ficará vinculada a esta pesquisa. Apenas pesquisas sincronizadas com o banco aparecem na lista.</div>
 
