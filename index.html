@@ -4481,7 +4481,8 @@ function renderAoVivo() {
     if (filtroQ) regsHoje = regsHoje.filter(r=>r.pesquisa_id==filtroQ);
     const todosHoje = DB.registros.filter(r=>r.op_id===op.id&&r.dh.startsWith(hoje));
     const ultimo = todosHoje.sort((a,b)=>b.dh.localeCompare(a.dh))[0];
-    const qAtivo = ultimo ? DB.pesquisas.find(p=>p.id===ultimo.pesquisa_id) : null;
+    const qAtivo = ultimo ? DB.pesquisas.find(p=>p.id===ultimo.pesquisa_id)
+                          : (op.pesquisa_id ? DB.pesquisas.find(p=>p.id===op.pesquisa_id) : null);
 
     // Se filtroQ e o operador não trabalhou nesse Q hoje, pula
     if (filtroQ && !regsHoje.length && !todosHoje.some(r=>r.pesquisa_id==filtroQ)) return null;
@@ -4491,7 +4492,10 @@ function renderAoVivo() {
     const total    = regsHoje.length;
     const ultimaAtiv = ultimo ? new Date(ultimo.dh) : null;
     const minAtras   = ultimaAtiv ? Math.round((agora-ultimaAtiv)/60000) : null;
-    const online     = minAtras !== null && minAtras <= 30;
+    // Online por registro recente OU por heartbeat de sessão ativo (≤ 2 min)
+    const heartbeat  = op.sessao_heartbeat ? new Date(op.sessao_heartbeat) : null;
+    const hbMin      = heartbeat ? Math.round((agora-heartbeat)/60000) : null;
+    const online     = (minAtras !== null && minAtras <= 30) || (hbMin !== null && hbMin <= 2);
 
     // Pausa ativa?
     const pausasOp = (DB.pausas||[]).filter(p=>p.op_id===op.id&&!p.fim);
