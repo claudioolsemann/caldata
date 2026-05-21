@@ -3592,7 +3592,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       <button class="sn-btn"   id="sn-gestao"       onclick="nav('gestao')">👁 Gestão de Operadores</button>
       <button class="sn-btn"   id="sn-pausas"       onclick="nav('pausas')">⏸ Pausas</button>
       <button class="sn-btn"   id="sn-visaogeral"  onclick="nav('visaogeral')">📡 Visão Geral</button>
-      <button class="sn-btn"   id="sn-chat"         onclick="nav('chat')">💬 Chat</button>
+      <button class="sn-btn"   id="sn-chat"         onclick="nav('chat')" style="position:relative">💬 Chat<span id="sn-chat-badge" style="display:none;position:absolute;top:6px;right:10px;background:#FF4D00;color:#fff;border-radius:10px;min-width:16px;height:16px;font-size:9px;font-weight:800;line-height:16px;text-align:center;padding:0 4px"></span></button>
       <button class="sn-btn"   id="sn-operadores"   onclick="nav('operadores')">👥 Operadores</button>
       <div class="sn-sep"></div>
       <div class="sn-lbl">CONFIGURAÇÃO</div>
@@ -13441,6 +13441,10 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 async function pgChat() {
   if (!DB.mensagens) DB.mensagens = [];
 
+  // Zera badge do menu lateral ao abrir a aba (admin está vendo as mensagens)
+  const _snChatBadge = document.getElementById('sn-chat-badge');
+  if (_snChatBadge) _snChatBadge.style.display = 'none';
+
   // FASE 4 SUB-2 (etapa 4b): hidrata mensagens do banco — inclusive respostas dos operadores
   if (window._hidratarMensagensDoAdmin) {
     await window._hidratarMensagensDoAdmin();
@@ -13835,6 +13839,7 @@ window._atualizarSinoAdmin = async function() {
     const total = r.data.total || 0;
     const badge = document.getElementById('sino-badge');
     const btn = document.getElementById('btn-sino-admin');
+    const snBadge = document.getElementById('sn-chat-badge');
     if (!badge || !btn) return;
     if (total > 0) {
       badge.style.display = 'block';
@@ -13843,11 +13848,15 @@ window._atualizarSinoAdmin = async function() {
       btn.style.background = 'rgba(255,77,0,.2)';
       btn.style.borderColor = '#FF4D00';
       btn.style.color = '#FF7A40';
+      // Badge no menu lateral
+      if (snBadge) { snBadge.style.display = 'inline-block'; snBadge.textContent = total > 99 ? '99+' : String(total); }
     } else {
       badge.style.display = 'none';
       btn.style.background = '#2e3850';
       btn.style.borderColor = '#3a4560';
       btn.style.color = '#c4cad8';
+      // Zera badge do menu
+      if (snBadge) snBadge.style.display = 'none';
     }
   } catch (e) {
     // Silenciosamente ignora — próximo pulso tenta de novo
