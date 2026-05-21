@@ -6539,7 +6539,7 @@ function renderEditorQ(titulo) {
             </div>
             <div class="col">
               <label>Tipo</label>
-              <select id="np-tipo" onchange="toggleNpOpts()">
+              <select id="np-tipo" onchange="toggleNpOpts();_atualizarPreviewNp()">
                 <option value="escala5">Escala 1–5 (ótima→péssima)</option>
                 <option value="unica">Escolha única</option>
                 <option value="binaria">Sim / Não</option>
@@ -6551,13 +6551,20 @@ function renderEditorQ(titulo) {
               </select>
             </div>
           </div>
-          <label>Texto da pergunta</label>
-          <textarea id="np-txt" rows="2" placeholder="Ex: COMO O(A) SR(A) AVALIA A ADMINISTRAÇÃO..."></textarea>
-          <label>Instrução ao entrevistador</label>
-          <input id="np-ic" placeholder="Ex: (LEIA DE 1 A 5) · (NÃO LER AS ALTERNATIVAS)">
-          <div id="np-opts-wrap" style="display:none">
-            <label>Opções de resposta <span style="font-weight:400;color:#aaa">(uma por linha)</span></label>
-            <textarea id="np-opts" rows="4" placeholder="CANDIDATO A&#10;CANDIDATO B&#10;NÃO SABE&#10;NÃO RESPONDEU"></textarea>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <div style="flex:1;min-width:260px">
+              <label>Texto da pergunta</label>
+              <textarea id="np-txt" rows="2" placeholder="Ex: COMO O(A) SR(A) AVALIA A ADMINISTRAÇÃO..." oninput="_atualizarPreviewNp()"></textarea>
+              <label>Instrução ao entrevistador</label>
+              <input id="np-ic" placeholder="Ex: (LEIA DE 1 A 5) · (NÃO LER AS ALTERNATIVAS)" oninput="_atualizarPreviewNp()">
+              <div id="np-opts-wrap" style="display:none">
+                <label>Opções de resposta <span style="font-weight:400;color:#aaa">(uma por linha)</span></label>
+                <textarea id="np-opts" rows="4" placeholder="CANDIDATO A&#10;CANDIDATO B&#10;NÃO SABE&#10;NÃO RESPONDEU" oninput="_atualizarPreviewNp()"></textarea>
+              </div>
+            </div>
+            <div style="flex:1;min-width:240px">
+              <div id="np-preview" style="margin-top:22px"><div style="color:#555e78;font-size:11px;font-style:italic;padding:10px 0">Digite o texto da pergunta para ver o preview.</div></div>
+            </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
             <input type="checkbox" id="np-cruz" checked style="width:auto">
@@ -6608,6 +6615,89 @@ function optsParaTipo(tipo, raw) {
   if (tipo==='tendencia') return ['MELHOROU','FICOU IGUAL','PIOROU','NÃO SABE'];
   if (tipo==='aprovacao') return ['APROVA','DESAPROVA','NÃO SABE','NÃO RESPONDEU'];
   return (raw||'').split('\n').map(x=>x.trim()).filter(Boolean);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  PREVIEW INLINE DE PERGUNTA — usado no editor (nova + edição)
+//  Recebe um objeto pergunta parcial e renderiza num container.
+// ═══════════════════════════════════════════════════════════
+function _previewPerg(p, containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const txt  = (p.txt||'').trim();
+  const ic   = (p.ic||'').trim();
+  const tipo = p.tipo || 'escala5';
+  const opts = (() => {
+    if (tipo==='escala5'||tipo==='aberta'||tipo==='idade_aberta') return [];
+    if (p.opts && p.opts.length) return p.opts;
+    if (tipo==='binaria')   return ['SIM','NÃO'];
+    if (tipo==='tendencia') return ['MELHOROU','FICOU IGUAL','PIOROU','NÃO SABE'];
+    if (tipo==='aprovacao') return ['APROVA','DESAPROVA','NÃO SABE','NÃO RESPONDEU'];
+    return [];
+  })();
+
+  if (!txt) {
+    el.innerHTML = '<div style="color:#555e78;font-size:11px;font-style:italic;padding:10px 0">Digite o texto da pergunta para ver o preview.</div>';
+    return;
+  }
+
+  let opc = '';
+  if (tipo === 'escala5') {
+    const lbl = ['ÓTIMA','BOA','REGULAR','RUIM','PÉSSIMA'];
+    opc = `<div style="display:flex;gap:6px;margin-bottom:6px">${[1,2,3,4,5].map((i,idx)=>`
+      <div style="flex:1;padding:10px 4px;border:2px solid #3a4560;border-radius:10px;text-align:center;cursor:default">
+        <div style="font-size:16px;font-weight:800;color:#f0f2f8">${i}</div>
+        <div style="font-size:8px;color:#8b95aa;margin-top:3px">${lbl[idx]}</div>
+      </div>`).join('')}</div>
+      <div style="display:flex;gap:6px">
+        <div style="flex:1;padding:7px;border:1.5px solid #3a4560;border-radius:8px;text-align:center;font-size:11px;color:#8b95aa;cursor:default">NÃO SABE</div>
+        <div style="flex:1;padding:7px;border:1.5px solid #3a4560;border-radius:8px;text-align:center;font-size:11px;color:#8b95aa;cursor:default">NÃO RESPONDEU</div>
+      </div>`;
+  } else if (tipo === 'aberta' || tipo === 'idade_aberta') {
+    opc = `<div style="border:1.5px solid #3a4560;border-radius:10px;padding:10px 12px;font-size:13px;color:#555e78;background:#1d2638">Digite a resposta...</div>`;
+  } else if (tipo === 'multipla') {
+    opc = `<div style="display:flex;flex-direction:column;gap:6px">${opts.map((o,i)=>`
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1.5px solid #3a4560;border-radius:10px;background:#2e3850">
+        <input type="checkbox" disabled style="width:16px;height:16px;flex-shrink:0">
+        <span style="font-size:11px;color:#636d88;min-width:18px">${i+1}.</span>
+        <span style="font-size:13px;color:#c4cad8">${o}</span>
+      </div>`).join('')}</div>`;
+  } else if (opts.length) {
+    opc = `<div style="display:flex;flex-direction:column;gap:6px">${opts.map((o,i)=>`
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1.5px solid #3a4560;border-radius:10px;background:#2e3850">
+        <input type="radio" disabled style="width:16px;height:16px;flex-shrink:0">
+        <span style="font-size:11px;color:#636d88;min-width:18px">${i+1}.</span>
+        <span style="font-size:13px;color:#c4cad8">${o}</span>
+      </div>`).join('')}</div>`;
+  }
+
+  el.innerHTML = `
+    <div style="background:#1a2030;border:1.5px solid #2e3850;border-radius:10px;padding:12px 14px">
+      <div style="font-size:9px;font-weight:700;color:#555e78;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">👁 Preview — visão do operador</div>
+      <div style="font-size:14px;font-weight:700;color:#f0f2f8;line-height:1.4;margin-bottom:${ic?'6px':'10px'}">${txt}</div>
+      ${ic ? `<div style="font-size:11px;color:#f0b840;background:rgba(240,184,64,.08);border-left:3px solid #f0b840;padding:5px 8px;border-radius:0 6px 6px 0;margin-bottom:10px">${ic}</div>` : ''}
+      ${opc}
+    </div>`;
+}
+
+// Lê os campos do formulário de NOVA pergunta e chama _previewPerg
+function _atualizarPreviewNp() {
+  const tipo    = document.getElementById('np-tipo')?.value || 'escala5';
+  const txt     = document.getElementById('np-txt')?.value || '';
+  const ic      = document.getElementById('np-ic')?.value || '';
+  const optsRaw = document.getElementById('np-opts')?.value || '';
+  const opts    = optsParaTipo(tipo, optsRaw);
+  _previewPerg({ txt, ic, tipo, opts }, 'np-preview');
+}
+
+// Lê os campos do formulário de EDIÇÃO inline e chama _previewPerg
+function _atualizarPreviewEp(pid) {
+  const tipo    = document.getElementById('ep_tipo_'+pid)?.value || 'escala5';
+  const txt     = document.getElementById('ep_txt_'+pid)?.value || '';
+  const ic      = document.getElementById('ep_ic_'+pid)?.value || '';
+  const optsRaw = document.getElementById('ep_opts_'+pid)?.value || '';
+  const opts    = optsParaTipo(tipo, optsRaw);
+  _previewPerg({ txt, ic, tipo, opts }, 'ep_preview_'+pid);
 }
 
 function addPerg() {
@@ -6685,7 +6775,7 @@ function editarPergIndividual(pid) {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
         <div style="flex:1;min-width:100px"><label style="margin-top:0">Código variável</label><input id="ep_var_${pid}" value="${p.var_cod||''}"></div>
         <div style="flex:2;min-width:180px"><label style="margin-top:0">Tipo</label>
-          <select id="ep_tipo_${pid}" onchange="toggleEpOpts('${pid}')">
+          <select id="ep_tipo_${pid}" onchange="toggleEpOpts('${pid}');_atualizarPreviewEp('${pid}')">
             <option value="escala5" ${p.tipo==='escala5'?'selected':''}>Escala 1–5</option>
             <option value="unica" ${p.tipo==='unica'?'selected':''}>Escolha única</option>
             <option value="binaria" ${p.tipo==='binaria'?'selected':''}>Sim / Não</option>
@@ -6708,19 +6798,28 @@ function editarPergIndividual(pid) {
           </select>
         </div>
       </div>
-      <label style="margin-top:0">Texto da pergunta</label>
-      <textarea id="ep_txt_${pid}" rows="2">${p.txt||''}</textarea>
-      <label>Instrução ao entrevistador</label>
-      <input id="ep_ic_${pid}" value="${p.ic||''}">
-      <div id="ep_opts_wrap_${pid}" style="display:${temOpts?'block':'none'}">
-        <label>Opções (uma por linha)</label>
-        <textarea id="ep_opts_${pid}" rows="4">${optsStr}</textarea>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:240px">
+          <label style="margin-top:0">Texto da pergunta</label>
+          <textarea id="ep_txt_${pid}" rows="2" oninput="_atualizarPreviewEp('${pid}')">${p.txt||''}</textarea>
+          <label>Instrução ao entrevistador</label>
+          <input id="ep_ic_${pid}" value="${p.ic||''}" oninput="_atualizarPreviewEp('${pid}')">
+          <div id="ep_opts_wrap_${pid}" style="display:${temOpts?'block':'none'}">
+            <label>Opções (uma por linha)</label>
+            <textarea id="ep_opts_${pid}" rows="4" oninput="_atualizarPreviewEp('${pid}')">${optsStr}</textarea>
+          </div>
+        </div>
+        <div style="flex:1;min-width:220px">
+          <div id="ep_preview_${pid}" style="margin-top:22px"></div>
+        </div>
       </div>
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="btn btn-p btn-sm" onclick="salvarEdicaoPerg('${pid}')">✓ Salvar pergunta</button>
         <button class="btn btn-sm" onclick="cancelarEdicaoPerg('${pid}')">Cancelar</button>
       </div>
     </div>`;
+  // Renderiza preview imediato com os dados existentes da pergunta
+  _atualizarPreviewEp('${pid}');
 }
 
 function toggleEpOpts(pid) {
@@ -8889,13 +8988,13 @@ function importarPonderacao(input) {
       for (let i = 0; i < Math.min(10, matriz.length); i++) {
         const linha = (matriz[i] || []).map(c => String(c||'').toUpperCase().trim());
         const txt = linha.join('|');
-        if (txt.match(/REGI[ÃA]O|LOCALIZ/) && txt.match(/SEXO/) && txt.match(/IDADE/) && txt.match(/INSTRU|ESCOLAR|GRAU/) && txt.match(/QUANT|META|COTA/)) {
+        if (txt.match(/REGI[ÃA]O|LOCALIZ/) && txt.match(/SEXO/) && txt.match(/IDADE/) && txt.match(/INSTRU|ESCOLAR|GRAU/) && txt.match(/QUANT|META|COTA|PREVISTA|PREVISTO/)) {
           headerIdx = i;
           break;
         }
       }
       if (headerIdx < 0) {
-        alert('❌ Não consegui identificar o cabeçalho da planilha.\n\nA Ponderação_Paraná deve ter uma linha com colunas tipo:\nREGIÃO | SEXO | IDADE | GRAU DE INSTRUÇÃO | QUANTIDADE');
+        alert('❌ Não consegui identificar o cabeçalho da planilha.\n\nFormato esperado:\nREGIÃO | SEXO | IDADE | INSTRUÇÃO | PREVISTA');
         return;
       }
 
@@ -8906,7 +9005,7 @@ function importarPonderacao(input) {
       const colSex = acharCol(/^SEXO/);
       const colIda = acharCol(/^IDADE|FAIXA/);
       const colIns = acharCol(/INSTRU|ESCOLAR|GRAU/);
-      const colQtd = acharCol(/QUANT|^META|^COTA/);
+      const colQtd = acharCol(/QUANT|^META|^COTA|PREVISTA|PREVISTO/);
 
       if (colReg < 0 || colSex < 0 || colIda < 0 || colIns < 0 || colQtd < 0) {
         alert('❌ Faltam colunas. Identifiquei:\n' +
@@ -14054,6 +14153,33 @@ function renderPonderacao() {
         <div id="pond-visao-perfil">${dimBlocos||'<div style="font-size:12px;color:#8b95aa">Nenhuma dimensão de cota ativa.</div>'}</div>
         <div id="pond-visao-perguntas" style="display:none">${pergBlocos||'<div style="font-size:12px;color:#8b95aa">Sem perguntas cruzáveis nesta pesquisa.</div>'}</div>
       ` : '<div style="font-size:12px;color:#8b95aa">Sem entrevistas registradas ainda.</div>'}
+    </div>
+
+    <!-- IMPORTAR PLANILHA DE PONDERAÇÃO -->
+    <div class="card" style="border:1.5px solid #3a5da8">
+      <div class="card-title" style="color:#7eb6ff">📥 Importar planilha de cotas previstas</div>
+      <div style="font-size:12px;color:#8b95aa;margin-bottom:12px;line-height:1.5">
+        Importe a planilha no formato padrão <strong style="color:#c4cad8">REGIÃO | SEXO | IDADE | INSTRUÇÃO | PREVISTA</strong>.
+        Cada linha é uma célula da matriz cruzada. A coluna INSTRUÇÃO pode ficar vazia (ex: faixa 16–17 anos).
+        Após importar, a matriz é usada como base para aplicar a ponderação automaticamente.
+      </div>
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+        <label class="btn" style="cursor:pointer;margin:0;border-color:#3a5da8;color:#7eb6ff;font-size:13px;font-weight:700">
+          📥 Selecionar planilha (.xlsx / .xls)
+          <input type="file" accept=".xlsx,.xls" style="display:none"
+            onchange="importarPonderacao(this)" data-qid="${qid}">
+        </label>
+        <div id="pond-import-status" style="font-size:12px;color:#8b95aa;padding:6px 0">
+          ${q.ponderacoes && q.ponderacoes.length
+            ? `✓ Última importação: <strong style="color:#2dc98e">${q.ponderacoes[q.ponderacoes.length-1].nome}</strong> — ${q.ponderacoes[q.ponderacoes.length-1].registros} registros`
+            : 'Nenhuma planilha importada ainda para esta pesquisa.'}
+        </div>
+      </div>
+      <div style="margin-top:10px;padding:8px 10px;background:#1a2030;border-radius:8px;border-left:3px solid #3a5da8">
+        <div style="font-size:10px;font-weight:700;color:#555e78;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Formato esperado</div>
+        <div style="font-family:monospace;font-size:11px;color:#7eb6ff">REGIÃO | SEXO | IDADE | INSTRUÇÃO | PREVISTA</div>
+        <div style="font-size:10px;color:#555e78;margin-top:3px">78 células · soma = meta da pesquisa · INSTRUÇÃO pode ser vazia</div>
+      </div>
     </div>
 
     <!-- NOVA PONDERAÇÃO -->
