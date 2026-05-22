@@ -1,11 +1,11 @@
-import { createClient } from '@supabase/supabase-js'
+const { createClient } = require('@supabase/supabase-js')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 )
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
   const secret = req.headers['x-elevenlabs-secret']
@@ -23,6 +23,7 @@ export default async function handler(req, res) {
     'no_answer':    { status: 10, txt: 'Caixa postal' },
     'failed':       { status: 9, txt: 'Problema telefonia' }
   }
+
   const s = statusMap[data.status] || { status: 9, txt: 'Erro desconhecido' }
 
   const { data: reg, error } = await supabase.rpc('criar_registro', {
