@@ -1048,7 +1048,9 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         // ─── FASE 4 EXTRA: campos de sessão (multi-login) ───
         sessao_token: o.sessao_token || null,
         sessao_inicio: o.sessao_inicio || null,
-        sessao_heartbeat: o.sessao_heartbeat || null
+        sessao_heartbeat: o.sessao_heartbeat || null,
+        sessao_pesquisa_id: o.sessao_pesquisa_id || null,
+        is_ia: o.is_ia === true
       }));
       // PERSISTE no localStorage também — sem isso, leitores que fazem
       // loadDB('operadores', []) (como _opAutorizado) pegam dados velhos
@@ -3594,6 +3596,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       <button class="sn-btn"   id="sn-visaogeral"  onclick="nav('visaogeral')">📡 Visão Geral</button>
       <button class="sn-btn"   id="sn-chat"         onclick="nav('chat')" style="position:relative">💬 Chat<span id="sn-chat-badge" style="display:none;position:absolute;top:6px;right:10px;background:#FF4D00;color:#fff;border-radius:10px;min-width:16px;height:16px;font-size:9px;font-weight:800;line-height:16px;text-align:center;padding:0 4px"></span></button>
       <button class="sn-btn"   id="sn-operadores"   onclick="nav('operadores')">👥 Operadores</button>
+      <button class="sn-btn"   id="sn-agenteia"    onclick="nav('agenteia')">🤖 Agente IA</button>
       <div class="sn-sep"></div>
       <div class="sn-lbl">CONFIGURAÇÃO</div>
       <button class="sn-btn"   id="sn-pesquisas"    onclick="nav('pesquisas')">📋 Pesquisas</button>
@@ -4106,7 +4109,7 @@ async function renderGrid() {
   const grid = document.getElementById('ops-grid');
   const vazio = document.getElementById('ops-vazio');
   // Filtra: só mostra operadores (não admins) e ativos
-  const ops = DB.operadores.filter(o => o.perfil === 'operador' && o.ativo);
+  const ops = DB.operadores.filter(o => o.perfil === 'operador' && o.ativo && !o.is_ia);
   if (!ops.length) {
     grid.innerHTML = '';
     vazio.style.display = 'block';
@@ -4385,7 +4388,7 @@ function nav(tab) {
   DB.registros  = loadDB('registros',  []);
   /* DB.operadores agora vem do Supabase (sincronizado no login). */
   DB.pausas     = loadDB('pausas',     []);
-  const fns = {dash:pgDash, aovivo:pgAoVivo, gestao:pgGestao, pausas:pgPausas, visaogeral:pgVisaoGeral, chat:pgChat, operadores:pgOperadores, pesquisas:pgPesquisas, cotas:pgCotas, telefones:pgTelefones, auditoria:pgAuditoria, resultados:pgResultados, relatorio:pgRelatorio, ponderacao:pgPonderacao, exportar:pgExportar};
+  const fns = {dash:pgDash, aovivo:pgAoVivo, gestao:pgGestao, pausas:pgPausas, visaogeral:pgVisaoGeral, chat:pgChat, operadores:pgOperadores, agenteia:pgAgenteIA, pesquisas:pgPesquisas, cotas:pgCotas, telefones:pgTelefones, auditoria:pgAuditoria, resultados:pgResultados, relatorio:pgRelatorio, ponderacao:pgPonderacao, exportar:pgExportar};
   window._tabAtual = tab;
   if (fns[tab]) fns[tab]();
 
@@ -4467,7 +4470,9 @@ function pgAoVivo() {
             ultimoLogin: o.ultimo_login,
             sessao_token: o.sessao_token || null,
             sessao_inicio: o.sessao_inicio || null,
-            sessao_heartbeat: o.sessao_heartbeat || null
+            sessao_heartbeat: o.sessao_heartbeat || null,
+            sessao_pesquisa_id: o.sessao_pesquisa_id || null,
+            is_ia: o.is_ia === true
           }));
         }
       }
@@ -4499,7 +4504,7 @@ function renderAoVivo() {
   const PAUSA_EMJ = {Banheiro:'🚻',Água:'💧',Instrução:'📋',Intervalo:'☕'};
   const STATUS_PAUSA = {Banheiro:'#60a8e8',Água:'#2dc98e',Instrução:'#f0b840',Intervalo:'#f0b840'};
 
-  const opStatus = DB.operadores.map((op,idx) => {
+  const opStatus = DB.operadores.filter(o => !o.is_ia).map((op,idx) => {
     let regsHoje = DB.registros.filter(r=>r.op_id===op.id&&r.dh.startsWith(hoje));
     if (filtroQ) regsHoje = regsHoje.filter(r=>r.pesquisa_id==filtroQ);
     const todosHoje = DB.registros.filter(r=>r.op_id===op.id&&r.dh.startsWith(hoje));
@@ -4659,7 +4664,7 @@ function renderGestao() {
   const hoje = agora.toISOString().slice(0,10);
   const filtroQ = document.getElementById('gestao-q-sel')?.value || '';
   const filtroStatus = document.getElementById('gestao-status-sel')?.value || '';
-  let ops = _filtrarOperadoresDoSupervisor([...DB.operadores]);
+  let ops = _filtrarOperadoresDoSupervisor([...DB.operadores].filter(o => !o.is_ia));
   // Filtrar por questionário: se selecionado, só mostra quem está naquele questionário
   if (filtroQ) ops = ops.filter(o => o.pesquisa_id == filtroQ);
   if (filtroStatus === 'ativo') ops = ops.filter(o => o.ativo);
@@ -18921,6 +18926,173 @@ const TIPOS_PAUSA_LISTA = [
   { tipo: 'Instrução',  emoji: '📚' },
   { tipo: 'Técnico',    emoji: '🔧' }
 ];
+
+
+// ════════════════════════════════════════════════════════════════
+//  AGENTE IA — Gestão de agentes IA (Helena e futuros agentes)
+// ════════════════════════════════════════════════════════════════
+
+async function pgAgenteIA() {
+  clearInterval(aoVivoTimer); aoVivoTimer = null;
+  window._tabAtual = 'agenteia';
+  const m = document.getElementById('adm-main');
+  m.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:1.5rem">
+    <span style="font-size:24px">🤖</span>
+    <div><div style="font-size:18px;font-weight:700;color:#e8eaf0">Agentes IA</div>
+    <div style="font-size:12px;color:#8b95aa">Gestão de agentes de entrevista por IA</div></div>
+    ${_ehMaster() ? `<button class="btn btn-sm" style="margin-left:auto;background:rgba(255,77,0,.15);color:#FF6B2B;border-color:#FF4D00" onclick="_agenteIANovoModal()">+ Novo Agente</button>` : ''}
+  </div>
+  <div id="agenteia-body"><div style="color:#8b95aa;padding:2rem;text-align:center">⏳ Carregando agentes…</div></div>`;
+
+  await _agenteIACarregar();
+}
+
+async function _agenteIACarregar() {
+  const body = document.getElementById('agenteia-body');
+  if (!body) return;
+  try {
+    const { data, error } = await supabaseClient.rpc('listar_agentes_ia');
+    if (error) throw error;
+    const agentes = data || [];
+    if (!agentes.length) {
+      body.innerHTML = `<div class="card" style="text-align:center;padding:2rem;color:#8b95aa">
+        <div style="font-size:48px;margin-bottom:1rem">🤖</div>
+        <div style="font-size:16px;margin-bottom:.5rem">Nenhum agente IA cadastrado</div>
+        ${_ehMaster() ? '<button class="btn" onclick="_agenteIANovoModal()">+ Cadastrar primeiro agente</button>' : ''}
+      </div>`;
+      return;
+    }
+    body.innerHTML = agentes.map(a => _agenteIACard(a)).join('');
+  } catch(e) {
+    body.innerHTML = `<div class="card" style="color:#f07070;padding:1rem">Erro ao carregar agentes: ${e.message || e}</div>`;
+  }
+}
+
+function _agenteIACard(a) {
+  const statusDot = a.ativo
+    ? `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#1D9E75;margin-right:6px"></span><span style="color:#2dc98e;font-size:12px">Ativo</span>`
+    : `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ccc;margin-right:6px"></span><span style="color:#8b95aa;font-size:12px">Inativo</span>`;
+
+  const ultimaEnt = a.ultima_entrevista
+    ? new Date(a.ultima_entrevista).toLocaleString('pt-BR')
+    : '—';
+
+  const pesquisa = a.pesquisa_nome
+    ? `<span class="chip ch-b">${a.pesquisa_nome}</span>`
+    : `<span style="color:#666;font-size:12px">Nenhuma pesquisa vinculada</span>`;
+
+  const provBadge = {
+    elevenlabs: `<span class="chip" style="background:rgba(99,102,241,.2);color:#a5b4fc;font-size:11px">ElevenLabs</span>`,
+  }[a.provedor] || `<span class="chip ch-x">${a.provedor}</span>`;
+
+  return `<div class="card" style="margin-bottom:1rem">
+    <div style="display:flex;align-items:flex-start;gap:1rem;flex-wrap:wrap">
+      <div style="width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#a855f7);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">🤖</div>
+      <div style="flex:1;min-width:200px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+          <span style="font-size:16px;font-weight:700;color:#e8eaf0">${esc(a.nome_exibicao)}</span>
+          ${statusDot}
+          ${provBadge}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          ${pesquisa}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
+          <div style="background:#1e2433;border-radius:8px;padding:10px">
+            <div style="font-size:11px;color:#8b95aa;margin-bottom:2px">LOGIN NO CALLDATA</div>
+            <div style="font-size:13px;font-family:monospace;color:#c4cad8">${esc(a.login)}</div>
+          </div>
+          <div style="background:#1e2433;border-radius:8px;padding:10px">
+            <div style="font-size:11px;color:#8b95aa;margin-bottom:2px">ID EXTERNO (PROVEDOR)</div>
+            <div style="font-size:13px;font-family:monospace;color:#c4cad8">${esc(a.agente_id_ext || '—')}</div>
+          </div>
+          <div style="background:#1e2433;border-radius:8px;padding:10px">
+            <div style="font-size:11px;color:#8b95aa;margin-bottom:2px">TOTAL ENTREVISTAS</div>
+            <div style="font-size:20px;font-weight:700;color:#FF6B2B">${a.total_entrevistas || 0}</div>
+          </div>
+          <div style="background:#1e2433;border-radius:8px;padding:10px">
+            <div style="font-size:11px;color:#8b95aa;margin-bottom:2px">ÚLTIMA ENTREVISTA</div>
+            <div style="font-size:12px;color:#c4cad8">${ultimaEnt}</div>
+          </div>
+        </div>
+        ${a.prompt_ativo ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:#8b95aa">Ver prompt ativo</summary><pre style="margin-top:8px;background:#1e2433;border-radius:8px;padding:10px;font-size:11px;color:#c4cad8;white-space:pre-wrap;max-height:200px;overflow-y:auto">${esc(a.prompt_ativo)}</pre></details>` : ''}
+      </div>
+      ${_ehMaster() ? `<div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+        <button class="btn btn-sm" onclick="_agenteIAEditarModal(${a.id})">✏ Editar</button>
+        <button class="btn btn-sm" style="color:#f0b840;border-color:#f0b840" onclick="_agenteIAVerEntrevistas(${a.op_id}, '${esc(a.nome_exibicao)}')">📊 Entrevistas</button>
+      </div>` : ''}
+    </div>
+  </div>`;
+}
+
+function _agenteIAVerEntrevistas(opId, nome) {
+  // Navega para Resultados com filtro por esse agente
+  nav('resultados');
+  // Aguarda render e aplica filtro
+  setTimeout(() => {
+    const sel = document.getElementById('res-op-sel');
+    if (sel) { sel.value = opId; sel.dispatchEvent(new Event('change')); }
+    toast(`📊 Mostrando entrevistas de ${nome}`);
+  }, 500);
+}
+
+async function _agenteIAEditarModal(id) {
+  const { data, error } = await supabaseClient.rpc('listar_agentes_ia');
+  if (error || !data) { toast('Erro ao carregar dados', 'erro'); return; }
+  const a = data.find(x => x.id === id);
+  if (!a) return;
+
+  const pesqOpts = '<option value="">— Nenhuma —</option>' +
+    DB.pesquisas.filter(p => p.ativa).map(p =>
+      `<option value="${p.id}"${a.pesquisa_id == p.id ? ' selected' : ''}>${p.nome}</option>`
+    ).join('');
+
+  abrirModal(`
+    <div style="font-size:16px;font-weight:700;margin-bottom:1.5rem">✏ Editar Agente IA</div>
+    <label>Nome de exibição</label>
+    <input id="aia-nome" type="text" value="${esc(a.nome_exibicao)}">
+    <label style="margin-top:12px">Provedor</label>
+    <select id="aia-provedor">
+      <option value="elevenlabs"${a.provedor==='elevenlabs'?' selected':''}>ElevenLabs</option>
+    </select>
+    <label style="margin-top:12px">ID do agente no provedor</label>
+    <input id="aia-extid" type="text" value="${esc(a.agente_id_ext || '')}">
+    <label style="margin-top:12px">Pesquisa ativa</label>
+    <select id="aia-pesquisa">${pesqOpts}</select>
+    <label style="margin-top:12px">Prompt ativo</label>
+    <textarea id="aia-prompt" rows="6" style="font-family:monospace;font-size:12px">${esc(a.prompt_ativo || '')}</textarea>
+    <label style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input type="checkbox" id="aia-ativo"${a.ativo?' checked':''}> Agente ativo
+    </label>
+    <div style="display:flex;gap:8px;margin-top:1.5rem;justify-content:flex-end">
+      <button class="btn" onclick="fecharModal()">Cancelar</button>
+      <button class="btn" style="background:rgba(255,77,0,.2);color:#FF6B2B;border-color:#FF4D00" onclick="_agenteIASalvar(${id})">💾 Salvar</button>
+    </div>
+  `);
+}
+
+async function _agenteIASalvar(id) {
+  const nome = document.getElementById('aia-nome')?.value?.trim();
+  if (!nome) { toast('Nome obrigatório', 'erro'); return; }
+  const { error } = await supabaseClient.rpc('salvar_agente_ia', {
+    p_id:          id,
+    p_nome:        nome,
+    p_provedor:    document.getElementById('aia-provedor')?.value || 'elevenlabs',
+    p_agente_ext:  document.getElementById('aia-extid')?.value?.trim() || null,
+    p_pesquisa_id: parseInt(document.getElementById('aia-pesquisa')?.value) || null,
+    p_prompt:      document.getElementById('aia-prompt')?.value?.trim() || null,
+    p_ativo:       document.getElementById('aia-ativo')?.checked ?? true,
+    p_config:      null
+  });
+  fecharModal();
+  if (error) { toast('Erro ao salvar: ' + (error.message || error), 'erro'); return; }
+  toast('✅ Agente salvo!');
+  await _agenteIACarregar();
+}
+
+function _agenteIANovoModal() {
+  toast('Em breve: cadastro de novo agente IA', 'info');
+}
 
 function pgPausas() {
   clearInterval(pausasTimerRef);
