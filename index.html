@@ -18990,7 +18990,7 @@ function _agenteIACard(a) {
       <div style="width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#a855f7);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">🤖</div>
       <div style="flex:1;min-width:200px">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
-          <span style="font-size:16px;font-weight:700;color:#e8eaf0">${esc(a.nome_exibicao)}</span>
+          <span style="font-size:16px;font-weight:700;color:#e8eaf0">${_escHtmlICR(a.nome_exibicao)}</span>
           ${statusDot}
           ${provBadge}
         </div>
@@ -19000,11 +19000,11 @@ function _agenteIACard(a) {
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
           <div style="background:#1e2433;border-radius:8px;padding:10px">
             <div style="font-size:11px;color:#8b95aa;margin-bottom:2px">LOGIN NO CALLDATA</div>
-            <div style="font-size:13px;font-family:monospace;color:#c4cad8">${esc(a.login)}</div>
+            <div style="font-size:13px;font-family:monospace;color:#c4cad8">${_escHtmlICR(a.login)}</div>
           </div>
           <div style="background:#1e2433;border-radius:8px;padding:10px">
             <div style="font-size:11px;color:#8b95aa;margin-bottom:2px">ID EXTERNO (PROVEDOR)</div>
-            <div style="font-size:13px;font-family:monospace;color:#c4cad8">${esc(a.agente_id_ext || '—')}</div>
+            <div style="font-size:13px;font-family:monospace;color:#c4cad8">${_escHtmlICR(a.agente_id_ext || '—')}</div>
           </div>
           <div style="background:#1e2433;border-radius:8px;padding:10px">
             <div style="font-size:11px;color:#8b95aa;margin-bottom:2px">TOTAL ENTREVISTAS</div>
@@ -19015,11 +19015,11 @@ function _agenteIACard(a) {
             <div style="font-size:12px;color:#c4cad8">${ultimaEnt}</div>
           </div>
         </div>
-        ${a.prompt_ativo ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:#8b95aa">Ver prompt ativo</summary><pre style="margin-top:8px;background:#1e2433;border-radius:8px;padding:10px;font-size:11px;color:#c4cad8;white-space:pre-wrap;max-height:200px;overflow-y:auto">${esc(a.prompt_ativo)}</pre></details>` : ''}
+        ${a.prompt_ativo ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:#8b95aa">Ver prompt ativo</summary><pre style="margin-top:8px;background:#1e2433;border-radius:8px;padding:10px;font-size:11px;color:#c4cad8;white-space:pre-wrap;max-height:200px;overflow-y:auto">${_escHtmlICR(a.prompt_ativo)}</pre></details>` : ''}
       </div>
       ${_ehMaster() ? `<div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
         <button class="btn btn-sm" onclick="_agenteIAEditarModal(${a.id})">✏ Editar</button>
-        <button class="btn btn-sm" style="color:#f0b840;border-color:#f0b840" onclick="_agenteIAVerEntrevistas(${a.op_id}, '${esc(a.nome_exibicao)}')">📊 Entrevistas</button>
+        <button class="btn btn-sm" style="color:#f0b840;border-color:#f0b840" onclick="_agenteIAVerEntrevistas(${a.op_id}, '${_escHtmlICR(a.nome_exibicao)}')">📊 Entrevistas</button>
       </div>` : ''}
     </div>
   </div>`;
@@ -19050,17 +19050,17 @@ async function _agenteIAEditarModal(id) {
   abrirModal(`
     <div style="font-size:16px;font-weight:700;margin-bottom:1.5rem">✏ Editar Agente IA</div>
     <label>Nome de exibição</label>
-    <input id="aia-nome" type="text" value="${esc(a.nome_exibicao)}">
+    <input id="aia-nome" type="text" value="${_escHtmlICR(a.nome_exibicao)}">
     <label style="margin-top:12px">Provedor</label>
     <select id="aia-provedor">
       <option value="elevenlabs"${a.provedor==='elevenlabs'?' selected':''}>ElevenLabs</option>
     </select>
     <label style="margin-top:12px">ID do agente no provedor</label>
-    <input id="aia-extid" type="text" value="${esc(a.agente_id_ext || '')}">
+    <input id="aia-extid" type="text" value="${_escHtmlICR(a.agente_id_ext || '')}">
     <label style="margin-top:12px">Pesquisa ativa</label>
     <select id="aia-pesquisa">${pesqOpts}</select>
     <label style="margin-top:12px">Prompt ativo</label>
-    <textarea id="aia-prompt" rows="6" style="font-family:monospace;font-size:12px">${esc(a.prompt_ativo || '')}</textarea>
+    <textarea id="aia-prompt" rows="6" style="font-family:monospace;font-size:12px">${_escHtmlICR(a.prompt_ativo || '')}</textarea>
     <label style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer">
       <input type="checkbox" id="aia-ativo"${a.ativo?' checked':''}> Agente ativo
     </label>
