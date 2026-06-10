@@ -11264,16 +11264,12 @@ function _resCarregarFiltros() {
   const q = DB.pesquisas.find(x => x.id == qid);
   const regs = DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1);
 
-  // Quais dimensões a pesquisa REALMENTE tem. Se o campo gravado no registro não
-  // corresponde a uma pergunta de verdade (lixo de detecção antiga), a dimensão
-  // é descartada e nem vira filtro.
-  const dv = _resDemosValidos(q);
-
-  // Coleta valores únicos só das dimensões válidas
-  const sexos   = dv.sexo         ? [...new Set(regs.map(r=>r.sexo).filter(Boolean))].sort()         : [];
-  const faixas  = dv.faixa_etaria ? [...new Set(regs.map(r=>r.faixa_etaria).filter(Boolean))].sort() : [];
-  const regioes = dv.regiao       ? [...new Set(regs.map(r=>r.regiao).filter(Boolean))].sort()       : [];
-  const escols  = dv.escolaridade ? [...new Set(regs.map(r=>r.escolaridade).filter(Boolean))].sort() : [];
+  // Demografia derivada das respostas (confiável). Coleta só valores reais.
+  const demos = regs.map(r => _resDemoReg(q, r));
+  const sexos   = [...new Set(demos.map(d=>d.sexo).filter(Boolean))].sort();
+  const faixas  = [...new Set(demos.map(d=>d.faixa_etaria).filter(Boolean))].sort();
+  const regioes = [...new Set(demos.map(d=>d.regiao).filter(Boolean))].sort();
+  const escols  = [...new Set(demos.map(d=>d.escolaridade).filter(Boolean))].sort();
 
   const sel = (id, label, opts) => `
     <div class="col">
@@ -11364,17 +11360,32 @@ function _resPergCodTxt(p){
   return { cod, txt };
 }
 
-// Quais campos demográficos a pesquisa realmente possui, segundo a detecção
-// ATUAL (já corrigida). Serve pra descartar valores gravados que vieram de uma
-// detecção antiga errada — ex.: "MERENDA ESCOLAR" tinha sido lido como
-// escolaridade. Se a pesquisa não tem pergunta daquele tipo, a dimensão some.
-function _resDemosValidos(q){
-  const v = { sexo:false, faixa_etaria:false, escolaridade:false, regiao:false };
+// Demografia de UM registro, derivada das RESPOSTAS reais + perguntas, usando só
+// sinais confiáveis: o campo demoCampo (marcado no editor) ou um var_cod
+// conhecido. SEM adivinhação por texto. A resposta é buscada por var_cod e, se
+// não houver, pelo id local da pergunta (no banco as respostas vêm por var_cod;
+// perguntas sem código ficam pelo id). Assim conserta o que já está gravado e o
+// que vier — sem refazer entrevista. Se nenhuma pergunta for confiável, devolve
+// vazio (nada de lixo).
+function _resDemoReg(q, reg){
+  const demo = { sexo:'', faixa_etaria:'', escolaridade:'', regiao:'' };
+  const resp = (reg && reg.respostas) || {};
+  const VC = { '58910':'sexo', '59062':'faixa_etaria', '58909':'escolaridade', '67540':'regiao' };
   ((q && q.perguntas) || []).forEach(p=>{
-    const c = (typeof _detectarDemoCampo === 'function') ? _detectarDemoCampo(p) : '';
-    if (c && v[c] !== undefined) v[c] = true;
+    let c = '';
+    if (p && p.demoCampo && demo[p.demoCampo] !== undefined) c = p.demoCampo;
+    else if (p && p.var_cod && VC[String(p.var_cod)]) c = VC[String(p.var_cod)];
+    if (!c) return;
+    let val = (p.var_cod != null) ? resp[String(p.var_cod)] : undefined;
+    if (val == null || val === '') val = resp[p.id];
+    if (val == null || val === '') return;
+    if (Array.isArray(val)) val = val[0];
+    val = String(val);
+    if (c === 'faixa_etaria') demo.faixa_etaria = (typeof normalizarFaixaEtaria==='function' ? (normalizarFaixaEtaria(val)||val) : val);
+    else if (c === 'regiao') demo.regiao = (typeof _derivarRegional==='function' ? _derivarRegional(val) : val);
+    else demo[c] = val;
   });
-  return v;
+  return demo;
 }
 
 function renderGraficos() {
@@ -11390,10 +11401,11 @@ function renderGraficos() {
   let regs = DB.registros.filter(r=>r.pesquisa_id==qid&&r.status===1);
   if (tipo==='reais') regs = regs.filter(r=>r.origem!=='ponderacao');
   regs = filtrarPorPeriodo(regs, _pRes.dtIni, _pRes.dtFim, _pRes.hrIni, _pRes.hrFim);
-  if(sexo)   regs = regs.filter(r=>_resNorm(r.sexo)===_resNorm(sexo));
-  if(idade)  regs = regs.filter(r=>_resNorm(r.faixa_etaria)===_resNorm(idade));
-  if(regiao) regs = regs.filter(r=>{const rr=_resNorm(r.regiao), ff=_resNorm(regiao); return !!rr && (rr===ff || rr.startsWith(ff));});
-  if(escol)  regs = regs.filter(r=>_resNorm(r.escolaridade)===_resNorm(escol));
+  regs.forEach(r => { r._demo = _resDemoReg(q, r); });
+  if(sexo)   regs = regs.filter(r=>_resNorm(r._demo.sexo)===_resNorm(sexo));
+  if(idade)  regs = regs.filter(r=>_resNorm(r._demo.faixa_etaria)===_resNorm(idade));
+  if(regiao) regs = regs.filter(r=>{const rr=_resNorm(r._demo.regiao), ff=_resNorm(regiao); return !!rr && (rr===ff || rr.startsWith(ff));});
+  if(escol)  regs = regs.filter(r=>_resNorm(r._demo.escolaridade)===_resNorm(escol));
   const n = regs.length;
   const c = document.getElementById('res-graficos');
   if(!n){c.innerHTML='<div class="al-info">Sem dados para os filtros selecionados.</div>';return;}
@@ -11443,13 +11455,14 @@ function _getRegsResultados() {
   const tipo   = document.getElementById('res-tipo')?.value || 'ponderados';
   const _pRes  = getPeriodoFiltro('res');
   let regs = DB.registros.filter(r=>r.pesquisa_id==qid&&r.status===1);
+  const q = DB.pesquisas.find(x=>x.id==qid);
   if (tipo==='reais') regs = regs.filter(r=>r.origem!=='ponderacao');
   regs = filtrarPorPeriodo(regs, _pRes.dtIni, _pRes.dtFim, _pRes.hrIni, _pRes.hrFim);
-  if(sexo)   regs = regs.filter(r=>_resNorm(r.sexo)===_resNorm(sexo));
-  if(idade)  regs = regs.filter(r=>_resNorm(r.faixa_etaria)===_resNorm(idade));
-  if(regiao) regs = regs.filter(r=>{const rr=_resNorm(r.regiao), ff=_resNorm(regiao); return !!rr && (rr===ff || rr.startsWith(ff));});
-  if(escol)  regs = regs.filter(r=>_resNorm(r.escolaridade)===_resNorm(escol));
-  const q = DB.pesquisas.find(x=>x.id==qid);
+  regs.forEach(r => { r._demo = _resDemoReg(q, r); });
+  if(sexo)   regs = regs.filter(r=>_resNorm(r._demo.sexo)===_resNorm(sexo));
+  if(idade)  regs = regs.filter(r=>_resNorm(r._demo.faixa_etaria)===_resNorm(idade));
+  if(regiao) regs = regs.filter(r=>{const rr=_resNorm(r._demo.regiao), ff=_resNorm(regiao); return !!rr && (rr===ff || rr.startsWith(ff));});
+  if(escol)  regs = regs.filter(r=>_resNorm(r._demo.escolaridade)===_resNorm(escol));
   return { regs, q, n: regs.length };
 }
 
