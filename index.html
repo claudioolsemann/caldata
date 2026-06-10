@@ -5759,7 +5759,7 @@ function _renderPgOperadores() {
       if (temBanco) prefixo += '☁ ';
       else prefixo += '📁 ';
       if (eDup) prefixo += '⚠ ';
-      return `<option value="${q.id}" ${o.pesquisa_id==q.id?'selected':''}>${prefixo}${q.nome.slice(0,30)}${eDup?' [id '+q.id+']':''}</option>`;
+      return `<option value="${q.id}" ${o.pesquisa_id==q.id?'selected':''} title="${(q.nome||'').replace(/"/g,'&quot;')}">${prefixo}${q.nome}${eDup?' [id '+q.id+']':''}</option>`;
     }).join('');
     // ─── FASE 4 EXTRA — Status da sessão (multi-login) ───
     // Calcula status da sessão atual do operador. Admin é isento (sempre offline visual).
