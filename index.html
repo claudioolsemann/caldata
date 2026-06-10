@@ -11261,13 +11261,19 @@ function pgResultados() {
 function _resCarregarFiltros() {
   DB.registros = loadDB('registros', []);
   const qid = document.getElementById('res-q')?.value;
+  const q = DB.pesquisas.find(x => x.id == qid);
   const regs = DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1);
 
-  // Coleta valores únicos de cada dimensão
-  const sexos = [...new Set(regs.map(r=>r.sexo).filter(Boolean))].sort();
-  const faixas = [...new Set(regs.map(r=>r.faixa_etaria).filter(Boolean))].sort();
-  const regioes = [...new Set(regs.map(r=>r.regiao).filter(Boolean))].sort();
-  const escols = [...new Set(regs.map(r=>r.escolaridade).filter(Boolean))].sort();
+  // Quais dimensões a pesquisa REALMENTE tem. Se o campo gravado no registro não
+  // corresponde a uma pergunta de verdade (lixo de detecção antiga), a dimensão
+  // é descartada e nem vira filtro.
+  const dv = _resDemosValidos(q);
+
+  // Coleta valores únicos só das dimensões válidas
+  const sexos   = dv.sexo         ? [...new Set(regs.map(r=>r.sexo).filter(Boolean))].sort()         : [];
+  const faixas  = dv.faixa_etaria ? [...new Set(regs.map(r=>r.faixa_etaria).filter(Boolean))].sort() : [];
+  const regioes = dv.regiao       ? [...new Set(regs.map(r=>r.regiao).filter(Boolean))].sort()       : [];
+  const escols  = dv.escolaridade ? [...new Set(regs.map(r=>r.escolaridade).filter(Boolean))].sort() : [];
 
   const sel = (id, label, opts) => `
     <div class="col">
@@ -11356,6 +11362,19 @@ function _resPergCodTxt(p){
     if(m){ cod = m[2]; txt = txt.slice(m[0].length).trim(); }
   }
   return { cod, txt };
+}
+
+// Quais campos demográficos a pesquisa realmente possui, segundo a detecção
+// ATUAL (já corrigida). Serve pra descartar valores gravados que vieram de uma
+// detecção antiga errada — ex.: "MERENDA ESCOLAR" tinha sido lido como
+// escolaridade. Se a pesquisa não tem pergunta daquele tipo, a dimensão some.
+function _resDemosValidos(q){
+  const v = { sexo:false, faixa_etaria:false, escolaridade:false, regiao:false };
+  ((q && q.perguntas) || []).forEach(p=>{
+    const c = (typeof _detectarDemoCampo === 'function') ? _detectarDemoCampo(p) : '';
+    if (c && v[c] !== undefined) v[c] = true;
+  });
+  return v;
 }
 
 function renderGraficos() {
