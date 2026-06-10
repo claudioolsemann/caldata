@@ -16739,7 +16739,7 @@ function _detectarDemoCampo(p) {
   const txt = (p.txt||'').toUpperCase();
   if (txt.includes('SEXO') || txt.includes('MASCULINO') || txt.includes('FEMININO')) return 'sexo';
   if (ehPergIdade(p)) return 'faixa_etaria';
-  if (txt.includes('GRAU DE INSTRUÇÃO') || txt.includes('ESCOLARIDADE') || txt.includes('NÍVEL DE INSTRUÇÃO') || txt.includes('QUAL É O SEU GRAU') || txt.includes('QUAL O SEU GRAU') || txt.includes('ESTUDOU') || txt.includes('ESCOLA') || txt.includes('FORMAÇÃO ACADÊMICA') || txt.includes('NIVEL DE INSTRUC')) return 'escolaridade';
+  if (txt.includes('GRAU DE INSTRUÇÃO') || txt.includes('ESCOLARIDADE') || txt.includes('NÍVEL DE INSTRUÇÃO') || txt.includes('QUAL É O SEU GRAU') || txt.includes('QUAL O SEU GRAU') || txt.includes('ESTUDOU') || txt.includes('FORMAÇÃO ACADÊMICA') || txt.includes('NIVEL DE INSTRUC')) return 'escolaridade';
   if (txt.includes('REGIÃO') || txt.includes('REGIAO') || txt.includes('BAIRRO') || txt.includes('EM QUE PARTE') || txt.includes('EM QUAL PARTE') || txt.includes('ONDE O(A) SR(A) MORA') || txt.includes('ONDE O SR MORA') || txt.includes('ONDE A SRA MORA') || txt.includes('PONTA GROSSA O') || txt.includes('PONTA GROSSA SR') || txt.includes('LOCALIDADE')) return 'regiao';
   if (txt.includes('CELULAR') && txt.includes('LIGAÇÃO')) return 'celular';
   // Por opções salvas — última chance: se as opções batem com regiões padrão
