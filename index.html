@@ -8168,7 +8168,19 @@ const DIMS_PADRAO = DIMS_SUGERIDAS;
 // Se a pesquisa tem dims customizadas (q.dims), usa elas.
 // Senão, usa as sugeridas como ponto de partida.
 function getDimsQ(q) {
-  return (q.dims && q.dims.length) ? q.dims : JSON.parse(JSON.stringify(DIMS_SUGERIDAS));
+  // Garante sempre as dimensões demográficas padrão (Sexo, Faixa, Escolaridade,
+  // Região) na tela de cotas, mesmo que a importação só tenha marcado algumas
+  // (ex.: só Sexo). As dimensões customizadas da pesquisa (q.dims) vêm primeiro
+  // e têm prioridade (preserva regionais/itens já configurados); as padrão que
+  // faltarem são acrescentadas. Padrão entra inativa, então NÃO afeta
+  // ponderação/exportação até ser ativada.
+  const padrao = JSON.parse(JSON.stringify(DIMS_SUGERIDAS));
+  const custom = (q && q.dims && q.dims.length) ? q.dims : [];
+  const vistas = {};
+  const out = [];
+  custom.forEach(d => { if (d && d.k && !vistas[d.k]) { vistas[d.k] = 1; out.push(d); } });
+  padrao.forEach(d => { if (!vistas[d.k]) { vistas[d.k] = 1; out.push(d); } });
+  return out;
 }
 
 // Inicializa estrutura de cotas da pesquisa
@@ -17461,8 +17473,10 @@ function parseQuestionario(texto, nomeArquivo) {
   // ════════════════════════════════════════════════════════════════
 
   function tentarParsearLinhaPergunta(linha) {
-    // Forma 1: "N -O- COD-TEXTO"
-    let m = linha.match(/^(\d{1,3})\s*-O-\s*(\d+)\s*-\s*(.+)$/);
+    // Forma 1: "N -TIPO- COD-TEXTO"  (TIPO = O, M, D, U... — qualquer letra)
+    // Antes só reconhecia "-O-"; perguntas "-M-"/"-D-" ficavam sem código e com
+    // o código grudado no texto. Agora qualquer marcador de tipo é aceito.
+    let m = linha.match(/^(\d{1,3})\s*-[A-Za-z]-\s*(\d+)\s*-\s*(.+)$/);
     if (m) return { numStr: m[1], num: parseInt(m[1]), var_cod: m[2], txt: m[3].trim() };
 
     // Forma 2: "N -TEXTO" / "N- TEXTO" / "N - TEXTO" / "N-TEXTO"
@@ -17569,7 +17583,7 @@ function parseQuestionario(texto, nomeArquivo) {
       if (/\bSEXO\b/i.test(textoP)) demoCampo = 'sexo';
       else if (/\b(IDADE|FAIXA ET[ÁA]RIA)\b/i.test(textoP)) demoCampo = 'faixa_etaria';
       else if (/\b(GRAU DE INSTRU[ÇC][ÃA]O|ESCOLARIDADE)\b/i.test(textoP)) demoCampo = 'escolaridade';
-      else if (/\b(REGI[ÃA]O|REGI[ÕO]ES)\b/i.test(textoP)) demoCampo = 'regiao';
+      else if (/\b(REGI[ÃA]O|REGI[ÕO]ES|BAIRRO|LOCALIDADE)\b/i.test(textoP)) demoCampo = 'regiao';
       // ─── DEBITO 10 — auto-detect tambem reconhece renda e religião ───
       else if (/\bRENDA\b/i.test(textoP)) demoCampo = 'renda';
       else if (/\bRELIGI[ÃA]O\b/i.test(textoP)) demoCampo = 'religiao';
