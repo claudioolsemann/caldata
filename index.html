@@ -3121,20 +3121,33 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     _atualizarBadgePendentes();
   }
 
-  // Tenta reenviar todos os pendentes; chamado pelo worker e em demanda
-  async function _pendentesProcessar() {
-    if (!window.registrosSb || !window.supabaseClient) return;
+  // Resolve a lista de pesquisas de forma confiável (DB é declarado em outro
+  // bloco de script; window.DB é exposto após o boot). Tenta os dois.
+  function _pesquisasRef() {
+    if (window.DB && Array.isArray(window.DB.pesquisas)) return window.DB.pesquisas;
+    if (typeof DB !== 'undefined' && DB && Array.isArray(DB.pesquisas)) return DB.pesquisas;
+    return [];
+  }
+
+  // Tenta reenviar todos os pendentes; chamado pelo worker e em demanda.
+  // interativo=true → ao final, se ainda sobrar pendente, mostra o erro real
+  // na tela e oferece descartar (pra nunca ficar preso sem saber o motivo).
+  async function _pendentesProcessar(interativo) {
+    if (!window.registrosSb || !window.supabaseClient) {
+      if (interativo) alert('Banco indisponível agora. Verifique a conexão e tente de novo.');
+      return;
+    }
     const arr = _pendentesList();
-    if (arr.length === 0) return;
+    if (arr.length === 0) { if (interativo && typeof toast === 'function') toast('Nada pendente'); return; }
     for (const item of arr) {
       try {
         // ─── Reparo: registros antigos podem ter sido enfileirados com pesquisa_id
         // LOCAL (timestamp) em vez do banco_id. O banco rejeita FK. Aqui trocamos
         // pelo banco_id correto antes de reenviar, usando DB.pesquisas.
         if (item.payload && item.payload.pesquisa_id != null) {
-          const _dbRef = (typeof DB !== 'undefined') ? DB : window.DB;
-          const _ps = (_dbRef && Array.isArray(_dbRef.pesquisas)) ? _dbRef.pesquisas : [];
-          const _pHit = _ps.find(x => x.id == item.payload.pesquisa_id);
+          const _ps = _pesquisasRef();
+          const _pHit = _ps.find(x => x.id == item.payload.pesquisa_id)
+                     || _ps.find(x => x.banco_id != null && x.banco_id == item.payload.pesquisa_id);
           if (_pHit && _pHit.banco_id) item.payload.pesquisa_id = parseInt(_pHit.banco_id);
         }
         const r = await window.registrosSb.criarRegistro(item.payload);
@@ -3150,10 +3163,34 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         }
       } catch(e) {
         console.warn('[fase4] erro processando pendente:', e);
-        // mantém na fila pra próxima rodada
+        try {
+          item._tentativas = (item._tentativas || 0) + 1;
+          item._ultimo_erro = e.message || String(e);
+          const all = _pendentesList().map(p => p._local_id === item._local_id ? item : p);
+          localStorage.setItem(_PEND_KEY, JSON.stringify(all));
+        } catch(_) {}
       }
     }
     _atualizarBadgePendentes();
+
+    // Modo interativo: dá um retorno claro ao usuário
+    if (interativo) {
+      const restantes = _pendentesList();
+      if (restantes.length === 0) {
+        if (typeof toast === 'function') toast('✓ Registros sincronizados com o banco');
+      } else {
+        const ult = restantes[restantes.length - 1];
+        const msg = '⚠ Não consegui enviar ' + restantes.length + ' registro(s) ao banco.\n\n' +
+                    'Último erro do banco:\n' + (ult._ultimo_erro || 'desconhecido') + '\n\n' +
+                    'Esses registros NÃO entraram no banco. Deseja DESCARTÁ-LOS?\n' +
+                    '(OK = descarta e limpa o aviso · Cancelar = mantém na fila)';
+        if (confirm(msg)) {
+          localStorage.setItem(_PEND_KEY, '[]');
+          _atualizarBadgePendentes();
+          if (typeof toast === 'function') toast('Pendentes descartados');
+        }
+      }
+    }
   }
 
   // Mostra/atualiza/oculta o badge "📡 X pendentes" no canto da tela
@@ -3168,8 +3205,8 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       el = document.createElement('div');
       el.id = 'badge-pendentes';
       el.style.cssText = 'position:fixed;bottom:14px;right:14px;background:#f0b840;color:#1a2030;padding:6px 12px;border-radius:18px;font-size:12px;font-weight:800;font-family:inherit;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:9999;cursor:pointer;user-select:none';
-      el.title = 'Registros aguardando envio ao banco. Clique para tentar reenviar.';
-      el.onclick = () => _pendentesProcessar();
+      el.title = 'Registros aguardando envio ao banco. Clique para reenviar (mostra o erro se falhar).';
+      el.onclick = () => _pendentesProcessar(true);
       document.body.appendChild(el);
     }
     el.textContent = '📡 ' + arr.length + ' pendente' + (arr.length>1?'s':'');
