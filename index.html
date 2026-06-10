@@ -16666,6 +16666,16 @@ function _detectarDemoCampo(p) {
   return '';
 }
 
+// ─── BAIRRO→REGIONAL (Etapa 1) — deriva a regional do sufixo " - Regional X" ───
+// Opt-in e verbatim: se a opção do bairro vier como "AGUA VERDE - Regional Portão",
+// grava "Regional Portão" (exatamente como escrito) no campo regiao. Sem sufixo,
+// devolve o valor cru (retrocompatível com perguntas de região comuns).
+function _derivarRegional(val){
+  if(!val) return val;
+  const m = String(val).match(/^.+?\s+-\s+(Regional\b.*)$/i);
+  return m ? m[1].trim() : val;
+}
+
 function _coletarDemo(){
   const demo={sexo:'',faixa_etaria:'',escolaridade:'',regiao:'',celular:false};
   (ePesquisa.perguntas||[]).forEach(p=>{
@@ -16675,6 +16685,7 @@ function _coletarDemo(){
     const val = eResps[p.id];
     if (campo === 'faixa_etaria') demo.faixa_etaria = normalizarFaixaEtaria(val) || val;
     else if (campo === 'celular') demo.celular = val === 'SIM';
+    else if (campo === 'regiao') demo.regiao = _derivarRegional(val);
     else if (demo[campo] !== undefined) demo[campo] = val;
   });
   return demo;
