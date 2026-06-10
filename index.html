@@ -11397,6 +11397,22 @@ function _resDemoReg(q, reg){
     else if (c === 'regiao') demo.regiao = (typeof _derivarRegional==='function' ? _derivarRegional(val) : val);
     else demo[c] = val;
   });
+  // Região pelo SINAL MAIS CONFIÁVEL: a resposta do bairro vem como
+  // "BAIRRO - Regional X". Se alguma resposta tem esse padrão, ela manda
+  // (independe de marcação/código, que podem apontar a pergunta errada).
+  // Agrupa por regional. Não remove o caminho acima — só tem prioridade.
+  try {
+    const vals = Object.values(resp);
+    for (let i = 0; i < vals.length; i++) {
+      let v = vals[i];
+      if (Array.isArray(v)) v = v[0];
+      v = (v == null) ? '' : String(v);
+      if (/[-–]\s*Regional\b/i.test(v)) {
+        demo.regiao = (typeof _derivarRegional === 'function' ? _derivarRegional(v) : v);
+        break;
+      }
+    }
+  } catch (e) {}
   return demo;
 }
 
@@ -16820,6 +16836,17 @@ function _coletarDemo(){
     else if (campo === 'regiao') demo.regiao = _derivarRegional(val);
     else if (demo[campo] !== undefined) demo[campo] = val;
   });
+  // Região pelo sinal confiável: a resposta do bairro vem como "BAIRRO - Regional X".
+  // Se existir, ela tem prioridade sobre a detecção por texto (que pode pegar a
+  // pergunta errada). Garante a regional certa gravada no registro.
+  try {
+    for (const k in eResps) {
+      let v = eResps[k];
+      if (Array.isArray(v)) v = v[0];
+      v = (v == null) ? '' : String(v);
+      if (/[-–]\s*Regional\b/i.test(v)) { demo.regiao = _derivarRegional(v); break; }
+    }
+  } catch (e) {}
   return demo;
 }
 
