@@ -11280,11 +11280,16 @@ function _resCarregarFiltros() {
 
   const el = document.getElementById('res-filtros-din');
   if (el) {
-    el.innerHTML =
-      sel('res-sexo',   'Sexo',         sexos.length   ? sexos   : ['MASCULINO','FEMININO']) +
-      sel('res-idade',  'Faixa etária', faixas.length  ? faixas  : ['16 A 18 ANOS','18 A 34 ANOS','35 A 59 ANOS','60 ANOS OU MAIS']) +
-      sel('res-reg',    'Região',       regioes.length ? regioes : []) +
-      (escols.length ? sel('res-escol', 'Escolaridade', escols) : '');
+    // Só mostra um filtro se houver valores REAIS daquela dimensão nos registros.
+    // Antes caía em listas fixas de exemplo que não casavam com nada e davam
+    // "Sem dados" ao serem selecionadas.
+    const filtros = [];
+    if (sexos.length)   filtros.push(sel('res-sexo',  'Sexo',         sexos));
+    if (faixas.length)  filtros.push(sel('res-idade', 'Faixa etária', faixas));
+    if (regioes.length) filtros.push(sel('res-reg',   'Região',       regioes));
+    if (escols.length)  filtros.push(sel('res-escol', 'Escolaridade', escols));
+    el.innerHTML = filtros.join('') ||
+      '<div style="font-size:12px;color:#8b95aa">Sem dados demográficos para filtrar ainda.</div>';
   }
   renderGraficos();
 }
@@ -11318,9 +11323,12 @@ async function _resBuscarDoBanco() {
       _origem: 'banco'
     }));
 
-    // Mescla: remove os que já existem do banco, adiciona os novos
-    const locais = DB.registros.filter(x => x.pesquisa_id != qid || x._origem !== 'banco');
-    DB.registros = [...locais, ...doBank];
+    // Banco é a fonte da verdade pra ESTA pesquisa: remove TODOS os registros
+    // dela (locais e cópias antigas do banco) e substitui pelos do banco. Antes,
+    // o registro local "real" não era removido, então a mesma entrevista podia
+    // ser contada duas vezes (uma local + uma do banco).
+    const outras = DB.registros.filter(x => x.pesquisa_id != qid);
+    DB.registros = [...outras, ...doBank];
 
     if (status) status.textContent = `✓ ${doBank.length} entrevistas do banco`;
     _resCarregarFiltros();
@@ -11329,6 +11337,25 @@ async function _resBuscarDoBanco() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '☁ Atualizar do banco'; }
   }
+}
+
+// Normaliza valor de filtro (maiúscula + sem espaços nas pontas) pra comparar
+// sem depender de caixa/acidente de digitação.
+function _resNorm(v){ return String(v==null?'':v).toUpperCase().trim(); }
+
+// Extrai código + texto limpos de uma pergunta. Corrige dois problemas:
+//  - var_cod nulo/vazio aparecendo como "null" no cabeçalho;
+//  - código grudado no início do texto (ex.: "M- 68573-QUAIS...") quando o
+//    importador do Word não separou o código. Só mexe no texto se var_cod estiver
+//    vazio (caso quebrado); senão devolve como está.
+function _resPergCodTxt(p){
+  let cod = (p && p.var_cod != null) ? String(p.var_cod).trim() : '';
+  let txt = (p && p.txt) ? String(p.txt).trim() : '';
+  if(!cod){
+    const m = txt.match(/^([A-Za-z]+\s*-\s*)?(\d{4,})\s*[-–]\s*/);
+    if(m){ cod = m[2]; txt = txt.slice(m[0].length).trim(); }
+  }
+  return { cod, txt };
 }
 
 function renderGraficos() {
@@ -11344,10 +11371,10 @@ function renderGraficos() {
   let regs = DB.registros.filter(r=>r.pesquisa_id==qid&&r.status===1);
   if (tipo==='reais') regs = regs.filter(r=>r.origem!=='ponderacao');
   regs = filtrarPorPeriodo(regs, _pRes.dtIni, _pRes.dtFim, _pRes.hrIni, _pRes.hrFim);
-  if(sexo)   regs = regs.filter(r=>r.sexo===sexo);
-  if(idade)  regs = regs.filter(r=>r.faixa_etaria===idade);
-  if(regiao) regs = regs.filter(r=>r.regiao&&r.regiao.startsWith(regiao));
-  if(escol)  regs = regs.filter(r=>r.escolaridade===escol);
+  if(sexo)   regs = regs.filter(r=>_resNorm(r.sexo)===_resNorm(sexo));
+  if(idade)  regs = regs.filter(r=>_resNorm(r.faixa_etaria)===_resNorm(idade));
+  if(regiao) regs = regs.filter(r=>{const rr=_resNorm(r.regiao), ff=_resNorm(regiao); return !!rr && (rr===ff || rr.startsWith(ff));});
+  if(escol)  regs = regs.filter(r=>_resNorm(r.escolaridade)===_resNorm(escol));
   const n = regs.length;
   const c = document.getElementById('res-graficos');
   if(!n){c.innerHTML='<div class="al-info">Sem dados para os filtros selecionados.</div>';return;}
@@ -11374,11 +11401,15 @@ function renderGraficos() {
       const keys=Object.keys(cnt).sort((a,b)=>isNaN(a)||isNaN(b)?0:a-b);
       if(!keys.length)return '';
       const maxV=Math.max(...Object.values(cnt),1);
+      // Base do percentual = quem respondeu ESTA pergunta (exclui não-resposta),
+      // padrão em pesquisa de opinião. O "n=" exibido passa a ser por pergunta.
+      const nq=Object.values(cnt).reduce((a,b)=>a+b,0)||1;
+      const {cod:_cod,txt:_txt}=_resPergCodTxt(p);
       let mH='';
       if(p.tipo==='escala5'){const vl=Object.entries(cnt).filter(([k])=>parseInt(k)<=5);const s=vl.reduce((a,[k,v])=>a+parseInt(k)*v,0),nv=vl.reduce((a,[,v])=>a+v,0);if(nv)mH=`<div style="font-size:12px;color:#7ec3f0;margin-bottom:8px">Média (excl. NS/NR): <strong>${(s/nv).toFixed(2)}</strong></div>`;}
-      return `<div class="card"><div style="font-size:10px;color:#c4cad8;font-family:monospace">${p.var_cod}</div>
-        <div style="font-size:13px;font-weight:700;margin-bottom:8px">${(p.txt||'').slice(0,70)}${(p.txt||'').length>70?'...':''} <span style="font-size:11px;font-weight:400;color:#aaa">(n=${n})</span></div>
-        ${mH}${keys.map(k=>{const pct=Math.round(cnt[k]/n*100),w=Math.round(cnt[k]/maxV*100),isN=!isNaN(parseInt(k)),cor=isN?(ESC_C[parseInt(k)-1]||'#FF4D00'):'#FF4D00';
+      return `<div class="card">${_cod?`<div style="font-size:10px;color:#c4cad8;font-family:monospace">${_cod}</div>`:''}
+        <div style="font-size:13px;font-weight:700;margin-bottom:8px">${_txt.slice(0,70)}${_txt.length>70?'...':''} <span style="font-size:11px;font-weight:400;color:#aaa">(n=${nq})</span></div>
+        ${mH}${keys.map(k=>{const pct=Math.round(cnt[k]/nq*100),w=Math.round(cnt[k]/maxV*100),isN=!isNaN(parseInt(k)),cor=isN?(ESC_C[parseInt(k)-1]||'#FF4D00'):'#FF4D00';
           return `<div class="bar-row"><div class="bar-info"><span>${k}${isN?' — '+(ESC_L[parseInt(k)]||k):''}</span><span>${pct}% (${cnt[k]})</span></div><div class="bar-track"><div class="bar-fill" style="width:${w}%;background:${cor}">${w>14?pct+'%':''}</div></div></div>`;}).join('')}</div>`;
     }).join('');
 }
@@ -11395,10 +11426,10 @@ function _getRegsResultados() {
   let regs = DB.registros.filter(r=>r.pesquisa_id==qid&&r.status===1);
   if (tipo==='reais') regs = regs.filter(r=>r.origem!=='ponderacao');
   regs = filtrarPorPeriodo(regs, _pRes.dtIni, _pRes.dtFim, _pRes.hrIni, _pRes.hrFim);
-  if(sexo)   regs = regs.filter(r=>r.sexo===sexo);
-  if(idade)  regs = regs.filter(r=>r.faixa_etaria===idade);
-  if(regiao) regs = regs.filter(r=>r.regiao&&r.regiao.startsWith(regiao));
-  if(escol)  regs = regs.filter(r=>r.escolaridade===escol);
+  if(sexo)   regs = regs.filter(r=>_resNorm(r.sexo)===_resNorm(sexo));
+  if(idade)  regs = regs.filter(r=>_resNorm(r.faixa_etaria)===_resNorm(idade));
+  if(regiao) regs = regs.filter(r=>{const rr=_resNorm(r.regiao), ff=_resNorm(regiao); return !!rr && (rr===ff || rr.startsWith(ff));});
+  if(escol)  regs = regs.filter(r=>_resNorm(r.escolaridade)===_resNorm(escol));
   const q = DB.pesquisas.find(x=>x.id==qid);
   return { regs, q, n: regs.length };
 }
