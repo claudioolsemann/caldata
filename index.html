@@ -3128,6 +3128,15 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     if (arr.length === 0) return;
     for (const item of arr) {
       try {
+        // ─── Reparo: registros antigos podem ter sido enfileirados com pesquisa_id
+        // LOCAL (timestamp) em vez do banco_id. O banco rejeita FK. Aqui trocamos
+        // pelo banco_id correto antes de reenviar, usando DB.pesquisas.
+        if (item.payload && item.payload.pesquisa_id != null) {
+          const _dbRef = (typeof DB !== 'undefined') ? DB : window.DB;
+          const _ps = (_dbRef && Array.isArray(_dbRef.pesquisas)) ? _dbRef.pesquisas : [];
+          const _pHit = _ps.find(x => x.id == item.payload.pesquisa_id);
+          if (_pHit && _pHit.banco_id) item.payload.pesquisa_id = parseInt(_pHit.banco_id);
+        }
         const r = await window.registrosSb.criarRegistro(item.payload);
         if (r.ok) {
           _pendentesRemove(item._local_id);
@@ -8481,7 +8490,14 @@ function verificarCotas(pesquisaId, demo) {
     if (!cotaDim || !cotaDim.ativa) return;
     const val = demo[d.k];
     if (!val) return;
-    const it = d.itens.find(i => val.toUpperCase().startsWith(i.split(' ')[0]));
+    // Acha o item de cota que a entrevista preenche. Match EXATO primeiro — essencial
+    // pras "Regional X", que compartilham a 1ª palavra ("REGIONAL"). _matchCota fica
+    // como fallback fuzzy (variações de escolaridade etc.). O antigo
+    // startsWith(1ª palavra) casava todas as regionais com a PRIMEIRA da lista,
+    // mandando o bloqueio de região sempre pro item errado.
+    const _valU = String(val).toUpperCase().trim();
+    const it = d.itens.find(i => String(i).toUpperCase().trim() === _valU)
+            || d.itens.find(i => _matchCota(val, i));
     if (!it) return;
     const cfg = cotaDim.itens[it];
     if (!cfg || !cfg.meta) return;
@@ -16727,7 +16743,7 @@ function confAbandono(){
 
   // ─── FASE 4 SUB-1: também grava no banco (com fallback offline) ───
   const _payloadAb = {
-    pesquisa_id: ePesquisa.id,
+    pesquisa_id: ePesquisa.banco_id ? parseInt(ePesquisa.banco_id) : ePesquisa.id,
     op_id: sessao.id,
     status: 4,
     status_txt: 'ABANDONOU',
@@ -16816,7 +16832,7 @@ function _finalizarComVerif(demo){
   // (idade numérica, renda) ficam null. "celular" não existe na tabela —
   // vai pra outras_dimensoes como JSON.
   const _payloadFin = {
-    pesquisa_id: ePesquisa.id,
+    pesquisa_id: ePesquisa.banco_id ? parseInt(ePesquisa.banco_id) : ePesquisa.id,
     op_id: sessao.id,
     status: 1,
     status_txt: 'BEM SUCEDIDA',
