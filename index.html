@@ -16511,7 +16511,11 @@ function iniciarEntrevista() {
     return;
   }
   // Verificar se meta geral foi atingida
-  ePesquisa = DB.pesquisas.find(p=>p.id==qid);
+  // qid pode vir como id LOCAL (seletor multi-pesquisa) ou banco_id (seletor de
+  // pesquisa única atribuída). Resolve por ambos pra não falhar quando o id local
+  // (timestamp de importação) difere do banco_id.
+  ePesquisa = DB.pesquisas.find(p => p.id == qid)
+           || DB.pesquisas.find(p => p.banco_id != null && p.banco_id == qid);
   if (!ePesquisa||(ePesquisa.perguntas||[]).length===0) { toast('Questionário sem perguntas cadastradas'); return; }
   DB.registros = loadDB('registros',[]);
   const validas = DB.registros.filter(r=>r.pesquisa_id==qid&&r.status===1);
