@@ -10159,7 +10159,7 @@ function renderRelFiltroGeo() {
   regs = filtrarPorPeriodo(regs, _pRel.dtIni, _pRel.dtFim, _pRel.hrIni, _pRel.hrFim);
 
   // Localidades únicas
-  const locs = [...new Set(regs.map(r => (r.regiao || '').trim()).filter(Boolean))].sort();
+  const locs = [...new Set(regs.map(r => String(r.regiao || '').trim()).filter(Boolean))].sort();
 
   // Oculta linha inteira se não há dados geográficos
   if (locs.length === 0) {
@@ -10179,8 +10179,8 @@ function renderRelFiltroGeo() {
   const locEscolhida = locSel.value;
   if (locEscolhida) {
     const bairros = [...new Set(
-      regs.filter(r => (r.regiao || '').trim() === locEscolhida)
-          .map(r => (r.bairro || r.outras_dimensoes?.bairro || '').trim())
+      regs.filter(r => String(r.regiao || '').trim() === locEscolhida)
+          .map(r => String(r.bairro || r.outras_dimensoes?.bairro || '').trim())
           .filter(Boolean)
     )].sort();
     if (bairros.length > 0) {
@@ -10202,10 +10202,10 @@ function _relFiltrarGeo(regs) {
   const loc = document.getElementById('rel-localidade')?.value || '';
   const bai = document.getElementById('rel-bairro')?.value || '';
   if (!loc) return regs;
-  let filtrados = regs.filter(r => (r.regiao || '').trim() === loc);
+  let filtrados = regs.filter(r => String(r.regiao || '').trim() === loc);
   if (bai) {
     filtrados = filtrados.filter(r =>
-      (r.bairro || r.outras_dimensoes?.bairro || '').trim() === bai
+      String(r.bairro || r.outras_dimensoes?.bairro || '').trim() === bai
     );
   }
   return filtrados;
