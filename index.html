@@ -3858,6 +3858,8 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
+window.__CALLBUILD__ = 'regional-cota-2026-06-11'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
 // Isso evita que dados fantasmas apareçam no painel — operadores SEMPRE vêm do banco agora.
@@ -8167,6 +8169,28 @@ const DIMS_PADRAO = DIMS_SUGERIDAS;
 // Retorna as dimensões de uma pesquisa.
 // Se a pesquisa tem dims customizadas (q.dims), usa elas.
 // Senão, usa as sugeridas como ponto de partida.
+// Deriva as regionais reais da pesquisa: das opções "Bairro - Regional X" das
+// perguntas (sinal confiável) e, se não houver, das respostas gravadas.
+// Vazio se a pesquisa não tem regional.
+function _regionaisDaPesquisa(q){
+  const set = new Set();
+  const capta = (val) => {
+    let s = Array.isArray(val) ? val[0] : val;
+    s = String(s == null ? '' : s);
+    if (/[-–]\s*Regional\b/i.test(s)) {
+      const r = (typeof _derivarRegional === 'function') ? _derivarRegional(s) : s;
+      if (r) set.add(String(r).trim());
+    }
+  };
+  ((q && q.perguntas) || []).forEach(p => (p.opts || []).forEach(capta));
+  if (!set.size) {
+    ((window.DB && DB.registros) || [])
+      .filter(r => String(r.pesquisa_id) === String(q && q.id))
+      .forEach(r => Object.values(r.respostas || {}).forEach(capta));
+  }
+  return [...set].sort();
+}
+
 function getDimsQ(q) {
   // Garante sempre as dimensões demográficas padrão (Sexo, Faixa, Escolaridade,
   // Região) na tela de cotas, mesmo que a importação só tenha marcado algumas
@@ -8180,6 +8204,18 @@ function getDimsQ(q) {
   const out = [];
   custom.forEach(d => { if (d && d.k && !vistas[d.k]) { vistas[d.k] = 1; out.push(d); } });
   padrao.forEach(d => { if (!vistas[d.k]) { vistas[d.k] = 1; out.push(d); } });
+  // Região: se a pesquisa tem regionais reais (opções "- Regional"), usa elas
+  // como categorias em vez das genéricas (CENTRO/OESTE…). Não sobrescreve se já
+  // estiverem configuradas com regionais, e não muta o objeto salvo (faz cópia).
+  try {
+    const regionais = _regionaisDaPesquisa(q);
+    if (regionais.length) {
+      const idx = out.findIndex(d => d && d.k === 'regiao');
+      if (idx >= 0 && !((out[idx].itens||[]).some(it => /Regional\b/i.test(String(it))))) {
+        out[idx] = { ...out[idx], itens: regionais };
+      }
+    }
+  } catch (e) {}
   return out;
 }
 
@@ -9371,8 +9407,11 @@ window.confirmarImportPonderacao = function() {
     const varCod = String(p.var_cod || '');
     const textoP = String(p.txt || '');
     let demoCampo = '';
-    // Códigos antigos primeiro
-    if (varCod==='58910') demoCampo='sexo';
+    // Região pelo padrão das OPÇÕES ("Bairro - Regional X") — sinal confiável,
+    // independe do texto; tem prioridade e evita falso-positivo.
+    if ((p.opts||[]).some(o => /[-–]\s*Regional\b/i.test(String(o)))) demoCampo='regiao';
+    // Códigos antigos
+    else if (varCod==='58910') demoCampo='sexo';
     else if (varCod==='59062') demoCampo='faixa_etaria';
     else if (varCod==='58909') demoCampo='escolaridade';
     else if (varCod==='67540') demoCampo='regiao';
@@ -10413,6 +10452,19 @@ function tabelaCruzada(perg, regsTotal, cruzamentos, opts) {
     </table>`;
 }
 
+// ── DE-PARA de escolaridade → 3 faixas do relatório (ATÉ FUNDAMENTAL / ENSINO
+// MÉDIO / SUPERIOR). Mapeia as descrições completas do questionário (ex.: "ATÉ
+// 4ª SÉRIE DO ENSINO FUNDAMENTAL (ANTIGO PRIMÁRIO)") pra coluna certa. Se não
+// reconhecer, devolve o valor cru (não força faixa errada). Usado só no relatório.
+function _escolBucket(val){
+  const s = String(val||'').toUpperCase();
+  if (!s) return val;
+  if (/SUPERIOR|FACULDADE|GRADUA|P[ÓO]S[\s-]?GRADUA|MESTRAD|DOUTORAD|UNIVERSIT/.test(s)) return 'SUPERIOR';
+  if (/M[ÉE]DIO|COLEGIAL|2[º°]?\s*GRAU|SEGUNDO GRAU|T[ÉE]CNIC/.test(s)) return 'ENSINO MÉDIO';
+  if (/FUNDAMENTAL|PRIM[ÁA]RIO|GIN[ÁA]SIO|1[º°]?\s*GRAU|PRIMEIRO GRAU|S[ÉE]RIE|ANALFAB|N[ÃA]O ALFABETIZAD|NUNCA ESTUDOU|L[ÊE] E ESCREVE/.test(s)) return 'ATÉ FUNDAMENTAL';
+  return val;
+}
+
 // ── GERADOR PRINCIPAL ──
 function gerarRelatorio() {
   if (!_exigirAdmin('gerar relatório')) return;
@@ -10429,10 +10481,11 @@ function gerarRelatorio() {
   const _pRelG = getPeriodoFiltro('rel');
   regs = filtrarPorPeriodo(regs, _pRelG.dtIni, _pRelG.dtFim, _pRelG.hrIni, _pRelG.hrFim);
   regs = _relFiltrarGeo(regs);
-  // Normalizar faixa_etaria (converter idades numéricas para faixas padrão)
+  // Normalizar faixa_etaria (idades→faixas) e escolaridade (descrição→3 faixas)
   regs = regs.map(r => ({
     ...r,
-    faixa_etaria: r.faixa_etaria ? normalizarFaixaEtaria(r.faixa_etaria) : r.faixa_etaria
+    faixa_etaria: r.faixa_etaria ? normalizarFaixaEtaria(r.faixa_etaria) : r.faixa_etaria,
+    escolaridade: _escolBucket(r.escolaridade)
   }));
   const n = regs.length;
   if (!n) { toast('Sem entrevistas para gerar relatório'); return; }
@@ -17599,7 +17652,10 @@ function parseQuestionario(texto, nomeArquivo) {
 
     // Detecta campo demográfico (mantém códigos antigos + heurística por texto)
     let demoCampo = '';
-    if (varCod==='58910') demoCampo='sexo';
+    // Região pelo padrão das OPÇÕES ("Bairro - Regional X") — sinal confiável,
+    // independe do texto do enunciado; tem prioridade e evita falso-positivo.
+    if (opts.some(o => /[-–]\s*Regional\b/i.test(String(o)))) demoCampo = 'regiao';
+    else if (varCod==='58910') demoCampo='sexo';
     else if (varCod==='59062') demoCampo='faixa_etaria';
     else if (varCod==='58909') demoCampo='escolaridade';
     else if (varCod==='67540') demoCampo='regiao';
