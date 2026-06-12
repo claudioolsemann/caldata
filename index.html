@@ -3860,7 +3860,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'respostas-agrupar-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'respostas-agrupar-v2-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -15424,11 +15424,19 @@ function _raSelPesquisa() {
   document.getElementById('ra-result').innerHTML = '';
   if (!pid) { selP.innerHTML = '<option value="">—</option>'; return; }
   const q = DB.pesquisas.find(x => String(x.id) === String(pid));
-  const pergs = q ? (q.perguntas || []) : [];
-  if (!pergs.length) { selP.innerHTML = '<option value="">(sem perguntas)</option>'; return; }
-  selP.innerHTML = '<option value="">Selecione…</option>' + pergs.map((p, i) => {
-    const tag = _raEhAberta(p) ? 'aberta' : 'fechada';
-    return `<option value="${p.id}">${i + 1}. [${tag}] ${_escHtmlICR((p.var_cod ? ('[' + p.var_cod + '] ') : '') + String(p.txt || '').slice(0, 60))}</option>`;
+  if (!q) { selP.innerHTML = '<option value="">—</option>'; return; }
+  DB.registros = loadDB('registros', DB.registros || []);
+  const regs = DB.registros.filter(r => String(r.pesquisa_id) === String(q.id));
+  const lista = (q.perguntas || []).map((p, i) => {
+    let n = 0;
+    regs.forEach(r => { let v = (r.respostas || {})[p.id]; if (Array.isArray(v)) v = v.join(' '); if (v != null && String(v).trim() !== '') n++; });
+    return { p: p, i: i, n: n };
+  }).filter(x => x.n > 0).sort((a, b) => b.n - a.n);
+  if (!lista.length) { selP.innerHTML = '<option value="">(nenhuma pergunta com respostas ainda)</option>'; return; }
+  selP.innerHTML = '<option value="">Selecione…</option>' + lista.map(x => {
+    const tag = _raEhAberta(x.p) ? 'aberta' : 'fechada';
+    const cab = (x.i + 1) + '. [' + tag + '] ' + (x.p.var_cod ? ('[' + x.p.var_cod + '] ') : '') + String(x.p.txt || '').slice(0, 55);
+    return `<option value="${x.p.id}">${_escHtmlICR(cab)} — ${x.n} resp.</option>`;
   }).join('');
 }
 
