@@ -3860,7 +3860,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'respostas-agrupar-v2-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'respostas-agrupar-v4-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -15389,6 +15389,20 @@ function _raEhAberta(p) {
   return _ceOptsDoTipo(p).length === 0;
 }
 
+function _raGarantirRegistros() {
+  return (async () => {
+    if (typeof window._hidratarRegistrosDoBanco === 'function') {
+      try {
+        const r = await window._hidratarRegistrosDoBanco(true);
+        if (r && r.ok) window._pgUsarRegistrosEmMemoria = true;
+      } catch (e) {}
+    }
+    if (!(Array.isArray(window.DB.registros) && window.DB.registros.length)) {
+      try { const ls = JSON.parse(localStorage.getItem('call_registros') || '[]'); if (Array.isArray(ls) && ls.length) window.DB.registros = ls; } catch (e) {}
+    }
+  })();
+}
+
 function pgRespostasAbertas() {
   if (!_ehAdminOuSupervisor()) {
     document.getElementById('adm-main').innerHTML = '<div class="card"><div class="al-info" style="margin:0">Sem permissão para esta área.</div></div>';
@@ -15418,21 +15432,22 @@ function pgRespostasAbertas() {
     <div id="ra-result"></div>`;
 }
 
-function _raSelPesquisa() {
+async function _raSelPesquisa() {
   const pid = document.getElementById('ra-q').value;
   const selP = document.getElementById('ra-p');
   document.getElementById('ra-result').innerHTML = '';
   if (!pid) { selP.innerHTML = '<option value="">—</option>'; return; }
   const q = DB.pesquisas.find(x => String(x.id) === String(pid));
   if (!q) { selP.innerHTML = '<option value="">—</option>'; return; }
-  DB.registros = loadDB('registros', DB.registros || []);
-  const regs = DB.registros.filter(r => String(r.pesquisa_id) === String(q.id));
+  selP.innerHTML = '<option value="">Carregando…</option>';
+  await _raGarantirRegistros();
+  const regs = (window.DB.registros || []).filter(r => String(r.pesquisa_id) === String(q.id));
   const lista = (q.perguntas || []).map((p, i) => {
     let n = 0;
     regs.forEach(r => { let v = (r.respostas || {})[p.id]; if (Array.isArray(v)) v = v.join(' '); if (v != null && String(v).trim() !== '') n++; });
     return { p: p, i: i, n: n };
   }).filter(x => x.n > 0).sort((a, b) => b.n - a.n);
-  if (!lista.length) { selP.innerHTML = '<option value="">(nenhuma pergunta com respostas ainda)</option>'; return; }
+  if (!lista.length) { selP.innerHTML = '<option value="">sem resposta aqui — ' + regs.length + ' entrevistas desta pesquisa / ' + (window.DB.registros||[]).length + ' no total</option>'; return; }
   selP.innerHTML = '<option value="">Selecione…</option>' + lista.map(x => {
     const tag = _raEhAberta(x.p) ? 'aberta' : 'fechada';
     const cab = (x.i + 1) + '. [' + tag + '] ' + (x.p.var_cod ? ('[' + x.p.var_cod + '] ') : '') + String(x.p.txt || '').slice(0, 55);
@@ -15453,11 +15468,7 @@ async function _raCarregar() {
   if (!perg) { cont.innerHTML = ''; return; }
   cont.innerHTML = '<div class="card"><div class="al-info" style="margin:0">Carregando respostas…</div></div>';
 
-  DB.registros = loadDB('registros', DB.registros || []);
-  if (typeof window._hidratarRegistrosDoBanco === 'function') {
-    try { await window._hidratarRegistrosDoBanco(false); } catch (e) {}
-    DB.registros = loadDB('registros', DB.registros || []);
-  }
+  await _raGarantirRegistros();
 
   const mapCount = {};
   let total = 0;
