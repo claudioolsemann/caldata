@@ -3859,7 +3859,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'consulta-entrevista-2026-06-11'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'consulta-entrevista-acesso-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -14966,14 +14966,22 @@ function importarBasePonderacao(input, qid) {
 function _ceSoDigitos(s) { return (s == null ? '' : String(s)).replace(/\D/g, ''); }
 
 function pgConsultaEntrevista() {
+  const _ceQs = _filtrarPesquisasDoSupervisor(DB.pesquisas);
+  const _ceQOpts = '<option value="">Todas as pesquisas permitidas</option>' +
+    _ceQs.map(q => `<option value="${q.id}">${_escHtmlICR(nomeQ(q))}</option>`).join('');
   document.getElementById('adm-main').innerHTML = `
     <div class="card">
       <div class="card-title">🔎 Consultar entrevista por telefone</div>
       <div style="font-size:12px;color:#8b95aa;margin-bottom:10px">
         Digite o telefone em que a entrevista foi realizada (com ou sem DDD).
         Mostra todas as entrevistas daquele número e permite exportar cada uma.
+        Você só acessa entrevistas das pesquisas que tem permissão.
       </div>
       <div class="row" style="align-items:flex-end">
+        <div class="col" style="flex:1;min-width:220px">
+          <label>Pesquisa</label>
+          <select id="ce-q">${_ceQOpts}</select>
+        </div>
         <div class="col" style="flex:1;min-width:220px">
           <label>Telefone</label>
           <input id="ce-tel" type="text" placeholder="Ex: 41998428402" maxlength="20"
@@ -14995,7 +15003,12 @@ function _ceBuscar() {
   const d = _ceSoDigitos(raw);
   if (d.length < 4) { cont.innerHTML = '<div class="al-info" style="margin:0">Digite ao menos 4 dígitos do telefone.</div>'; return; }
   DB.registros = loadDB('registros', DB.registros || []);
+  // Política de acesso: supervisor só enxerga as pesquisas que supervisiona; admin/master vê todas.
+  const _permitidas = new Set(_filtrarPesquisasDoSupervisor(DB.pesquisas).map(q => String(q.id)));
+  const _qSel = document.getElementById('ce-q') ? document.getElementById('ce-q').value : '';
   const achados = DB.registros.filter(r => {
+    if (!_permitidas.has(String(r.pesquisa_id))) return false;          // trava de acesso por papel
+    if (_qSel && String(r.pesquisa_id) !== String(_qSel)) return false; // filtro da pesquisa escolhida
     const t = _ceSoDigitos(r.telefone);
     return t && (t === d || t.includes(d) || d.includes(t));
   }).sort((a, b) => String(b.dh || '').localeCompare(String(a.dh || '')));
@@ -15050,6 +15063,9 @@ function _ceVer(id) {
   if (!cont) return;
   const reg = DB.registros.find(r => r.id == id);
   if (!reg) { cont.innerHTML = '<div class="al-info" style="margin:0">Entrevista não encontrada (pode ter sido atualizada). Busque novamente.</div>'; return; }
+  if (!_filtrarPesquisasDoSupervisor(DB.pesquisas).some(qx => String(qx.id) === String(reg.pesquisa_id))) {
+    cont.innerHTML = '<div class="al-info" style="margin:0">Acesso negado: esta entrevista pertence a uma pesquisa que você não supervisiona.</div>'; return;
+  }
   const q = DB.pesquisas.find(x => x.id == reg.pesquisa_id);
   const perguntas = q ? (q.perguntas || []) : [];
   const dt = reg.dh ? new Date(reg.dh).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
@@ -15126,6 +15142,7 @@ function _ceCsvEsc(s) {
 function _ceExportarCSV(id) {
   const reg = DB.registros.find(r => r.id == id);
   if (!reg) { toast('Entrevista não encontrada'); return; }
+  if (!_filtrarPesquisasDoSupervisor(DB.pesquisas).some(qx => String(qx.id) === String(reg.pesquisa_id))) { toast('Acesso negado a esta pesquisa'); return; }
   const linhas = _ceLinhasExport(reg);
   const csv = 'Campo;Resposta\n' + linhas.map(([k, v]) => _ceCsvEsc(k) + ';' + _ceCsvEsc(v)).join('\n');
   const nome = 'entrevista_' + _ceSoDigitos(reg.telefone || ('id' + reg.id)) + '_' + reg.id + '.csv';
@@ -15136,6 +15153,7 @@ function _ceExportarCSV(id) {
 function _ceExportarPDF(id) {
   const reg = DB.registros.find(r => r.id == id);
   if (!reg) { toast('Entrevista não encontrada'); return; }
+  if (!_filtrarPesquisasDoSupervisor(DB.pesquisas).some(qx => String(qx.id) === String(reg.pesquisa_id))) { toast('Acesso negado a esta pesquisa'); return; }
   const jsPDFCtor = window.jspdf && window.jspdf.jsPDF ? window.jspdf.jsPDF : window.jsPDF;
   if (!jsPDFCtor) { toast('❌ jsPDF não carregou'); return; }
   const doc = new jsPDFCtor({ orientation: 'portrait', unit: 'mm', format: 'a4' });
