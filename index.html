@@ -3859,7 +3859,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'consulta-entrevista-acesso-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'editar-entrevista-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -15099,7 +15099,8 @@ function _ceVer(id) {
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
         <button class="btn btn-sm" onclick="_ceBuscar()">← Voltar aos resultados</button>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${_ehAdminOuSupervisor() ? `<button class="btn btn-sm" style="color:#F0B840;border-color:#F0B840" onclick="_ceEditar(${reg.id})">✏ Editar respostas</button>` : ''}
           <button class="btn btn-sm" style="color:#e05252;border-color:#e05252" onclick="_ceExportarPDF(${reg.id})">📄 Exportar PDF</button>
           <button class="btn btn-p btn-sm" onclick="_ceExportarCSV(${reg.id})">📊 Exportar CSV</button>
         </div>
@@ -15187,6 +15188,185 @@ function _ceExportarPDF(id) {
   const nome = 'entrevista_' + _ceSoDigitos(reg.telefone || ('id' + reg.id)) + '_' + reg.id + '.pdf';
   doc.save(nome);
   toast('✓ PDF exportado');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EDIÇÃO DE ENTREVISTA (Feature B) — somente ADMIN.
+// Edita respostas + demografia de uma entrevista já realizada.
+// Exige MOTIVO (mín. 3 chars) e grava log via RPC editar_registro
+// (trigger de auditoria no banco). Ao salvar, recalcula a demografia
+// (mesma lógica da coleta) e RE-HIDRATA os registros do banco para
+// que COTAS e relatórios reflitam a alteração.
+// ═══════════════════════════════════════════════════════════════
+
+function _ceTipoIdade(p) {
+  if (typeof ehPergIdade === 'function') { try { return !!ehPergIdade(p); } catch (e) {} }
+  return p.tipo === 'idade_aberta' || /\b(IDADE|FAIXA ET[ÁA]RIA)\b/i.test(p.txt || '');
+}
+
+function _ceOptsDoTipo(p) {
+  if (typeof optsDoTipo === 'function') { try { const o = optsDoTipo(p); if (o) return o; } catch (e) {} }
+  const t = p.tipo;
+  if (t === 'binaria')   return ['SIM', 'NÃO'];
+  if (t === 'tendencia') return ['MELHOROU', 'FICOU IGUAL', 'PIOROU', 'NÃO SABE'];
+  if (t === 'aprovacao') return ['APROVA', 'DESAPROVA', 'NÃO SABE', 'NÃO RESPONDEU'];
+  return (p.opts || []);
+}
+
+function _ceInputPergunta(p, val) {
+  const idp = 'ce-edit-' + p.id;
+  const tipo = p.tipo || 'escala5';
+  if (tipo === 'escala5') {
+    const labels = { 1: '1 — ÓTIMA', 2: '2 — BOA', 3: '3 — REGULAR', 4: '4 — RUIM', 5: '5 — PÉSSIMA', 6: '6 — NÃO SABE', 7: '7 — NÃO RESPONDEU' };
+    const ops = [1, 2, 3, 4, 5, 6, 7].map(n => `<option value="${n}" ${String(val) === String(n) ? 'selected' : ''}>${labels[n]}</option>`).join('');
+    return `<select id="${idp}" style="width:100%"><option value="">— sem resposta —</option>${ops}</select>`;
+  }
+  if (_ceTipoIdade(p)) {
+    const fa = ['16 A 24 ANOS', '25 A 34 ANOS', '35 A 54 ANOS', '55 ANOS OU MAIS'];
+    const ops = fa.map(o => `<option value="${_escapeAttr(o)}" ${val === o ? 'selected' : ''}>${_escHtmlICR(o)}</option>`).join('');
+    return `<select id="${idp}" style="width:100%"><option value="">— sem resposta —</option>${ops}</select>`;
+  }
+  if (tipo === 'aberta') {
+    return `<textarea id="${idp}" rows="2" style="width:100%">${_escHtmlICR(val == null ? '' : String(val))}</textarea>`;
+  }
+  const opts = _ceOptsDoTipo(p);
+  if (!opts.length) {
+    return `<textarea id="${idp}" rows="2" style="width:100%">${_escHtmlICR(val == null ? '' : String(val))}</textarea>`;
+  }
+  if (tipo === 'multipla') {
+    const sel = Array.isArray(val) ? val : [];
+    return '<div style="display:flex;flex-direction:column;gap:4px">' +
+      opts.map(o => `<label style="display:flex;gap:6px;align-items:center;font-size:13px;color:#e8eaf0"><input type="checkbox" class="${idp}" value="${_escapeAttr(o)}" ${sel.includes(o) ? 'checked' : ''}> ${_escHtmlICR(o)}</label>`).join('') +
+      '</div>';
+  }
+  const ops = opts.map(o => `<option value="${_escapeAttr(o)}" ${val === o ? 'selected' : ''}>${_escHtmlICR(o)}</option>`).join('');
+  return `<select id="${idp}" style="width:100%"><option value="">— sem resposta —</option>${ops}</select>`;
+}
+
+function _ceColetarRespostas(perguntas) {
+  const out = {};
+  perguntas.forEach(p => {
+    const tipo = p.tipo || 'escala5';
+    if (tipo === 'multipla') {
+      const checks = Array.prototype.slice.call(document.querySelectorAll('input.ce-edit-' + p.id + ':checked'));
+      const arr = checks.map(c => c.value);
+      if (arr.length) out[p.id] = arr;
+      return;
+    }
+    const el = document.getElementById('ce-edit-' + p.id);
+    if (!el) return;
+    let v = el.value;
+    if (v === '' || v == null) return;
+    if (tipo === 'escala5') v = Number(v);
+    out[p.id] = v;
+  });
+  return out;
+}
+
+function _ceDerivarDemo(reg, perguntas, respostas) {
+  const demo = {
+    sexo: reg.sexo || '',
+    faixa_etaria: reg.faixa_etaria || '',
+    escolaridade: reg.escolaridade || '',
+    regiao: reg.regiao || ''
+  };
+  perguntas.forEach(p => {
+    let campo = '';
+    if (typeof _detectarDemoCampo === 'function') { try { campo = _detectarDemoCampo(p) || ''; } catch (e) {} }
+    if (!campo && p.demoCampo) campo = p.demoCampo;
+    if (!Object.prototype.hasOwnProperty.call(demo, campo)) return; // só os 4 campos de cota
+    const val = respostas[p.id];
+    if (val == null || val === '') return;
+    let novo = val;
+    if (campo === 'faixa_etaria' && typeof normalizarFaixaEtaria === 'function') novo = normalizarFaixaEtaria(val) || val;
+    else if (campo === 'regiao' && typeof _normalizarRegiao === 'function') novo = _normalizarRegiao(val) || val;
+    else if (campo === 'escolaridade') novo = (typeof _normalizarEscolaridade === 'function') ? (_normalizarEscolaridade(val) || val) : (typeof _escolBucket === 'function' ? _escolBucket(val) : val);
+    else if (campo === 'sexo') novo = String(val).toUpperCase();
+    demo[campo] = novo;
+  });
+  return demo;
+}
+
+function _ceEditar(id) {
+  const cont = document.getElementById('ce-result');
+  if (!cont) return;
+  if (!_ehAdminOuSupervisor()) { toast('Sem permissão para editar respostas'); return; }
+  const reg = DB.registros.find(r => r.id == id);
+  if (!reg) { toast('Entrevista não encontrada'); return; }
+  if (!_filtrarPesquisasDoSupervisor(DB.pesquisas).some(qx => String(qx.id) === String(reg.pesquisa_id))) { toast('Acesso negado a esta pesquisa'); return; }
+  const q = DB.pesquisas.find(x => x.id == reg.pesquisa_id);
+  const perguntas = q ? (q.perguntas || []) : [];
+  const linhas = perguntas.map((p, i) => `
+    <div style="padding:8px 0;border-bottom:1px solid #2a3550">
+      <div style="font-size:12px;color:#8b95aa">${i + 1}. ${p.var_cod ? '[' + _escHtmlICR(p.var_cod) + '] ' : ''}<span style="color:#F0B840">${_escHtmlICR(p.tipo || '')}</span></div>
+      <div style="font-size:13px;color:#e8eaf0;margin:2px 0 6px">${_escHtmlICR(p.txt || '(sem enunciado)')}</div>
+      ${_ceInputPergunta(p, (reg.respostas || {})[p.id])}
+    </div>`).join('');
+  cont.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <button class="btn btn-sm" onclick="_ceVer(${reg.id})">← Cancelar</button>
+        <button class="btn btn-p btn-sm" onclick="_ceSalvarEdicao(${reg.id})">💾 Salvar alterações</button>
+      </div>
+      <div class="card-title">✏ Editar entrevista #${reg.id}</div>
+      <div class="al-info" style="margin:0 0 12px">As cotas e relatórios usam a demografia derivada das respostas. Ao salvar, o sistema recalcula a demografia e re-sincroniza os registros — as cotas refletem a alteração. Toda edição fica registrada na auditoria.</div>
+      ${linhas || '<div class="al-info" style="margin:0">Pesquisa sem perguntas.</div>'}
+      <div style="margin-top:12px">
+        <label style="color:#FF6B2B;font-weight:700">Motivo da alteração (obrigatório)</label>
+        <textarea id="ce-edit-motivo" rows="2" style="width:100%" placeholder="Ex: correção da pergunta 3 conforme reescuta da ligação"></textarea>
+      </div>
+    </div>`;
+}
+
+async function _ceSalvarEdicao(id) {
+  if (!_ehAdminOuSupervisor()) { toast('Sem permissão para editar respostas'); return; }
+  const reg = DB.registros.find(r => r.id == id);
+  if (!reg) { toast('Entrevista não encontrada'); return; }
+  if (!_filtrarPesquisasDoSupervisor(DB.pesquisas).some(qx => String(qx.id) === String(reg.pesquisa_id))) { toast('Acesso negado a esta pesquisa'); return; }
+  const motivo = (document.getElementById('ce-edit-motivo') ? document.getElementById('ce-edit-motivo').value : '').trim();
+  if (motivo.length < 3) { toast('Informe o motivo da alteração (mín. 3 caracteres)'); return; }
+  const q = DB.pesquisas.find(x => x.id == reg.pesquisa_id);
+  const perguntas = q ? (q.perguntas || []) : [];
+  const novasResp = _ceColetarRespostas(perguntas);
+  const demo = _ceDerivarDemo(reg, perguntas, novasResp);
+
+  if (!window.supabaseClient) { toast('❌ Sem conexão com o banco'); return; }
+  toast('Salvando alteração...');
+  try {
+    const resp = await window.supabaseClient.rpc('editar_registro', {
+      p_id: reg.id,
+      p_status: reg.status,
+      p_status_txt: reg.status_txt,
+      p_sexo: demo.sexo || null,
+      p_idade: null,
+      p_faixa_etaria: demo.faixa_etaria || null,
+      p_escolaridade: demo.escolaridade || null,
+      p_renda: null,
+      p_regiao: demo.regiao || null,
+      p_outras_dimensoes: null,
+      p_respostas: novasResp,
+      p_motivo: motivo,
+      p_editado_por: (sessao && sessao.id) ? sessao.id : null
+    });
+    if (resp && resp.error) { toast('❌ Erro ao salvar: ' + (resp.error.message || resp.error)); return; }
+  } catch (e) {
+    toast('❌ Falha ao salvar: ' + (e && e.message ? e.message : e)); return;
+  }
+
+  // Atualiza local imediatamente (consistência instantânea)
+  reg.respostas = novasResp;
+  reg.sexo = demo.sexo;
+  reg.faixa_etaria = demo.faixa_etaria;
+  reg.escolaridade = demo.escolaridade;
+  reg.regiao = demo.regiao;
+  if (typeof saveDB === 'function') saveDB('registros', DB.registros);
+
+  // Re-hidrata do banco (fonte da verdade) → cotas/relatórios refletem a alteração
+  if (typeof window._hidratarRegistrosDoBanco === 'function') {
+    try { await window._hidratarRegistrosDoBanco(true); } catch (e) {}
+  }
+  toast('✓ Entrevista atualizada e registros re-sincronizados (cotas atualizadas)');
+  _ceVer(id);
 }
 
 function pgExportar() {
