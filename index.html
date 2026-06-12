@@ -3655,6 +3655,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       <button class="sn-btn"   id="sn-relatorio"    onclick="nav('relatorio')">📄 Relatório</button>
       <button class="sn-btn"   id="sn-ponderacao"   onclick="nav('ponderacao')">⚖ Ponderação</button>
       <button class="sn-btn"   id="sn-exportar"     onclick="nav('exportar')">💾 Exportar</button>
+      <button class="sn-btn" id="sn-consulta" onclick="nav('consulta')">🔎 Consultar Entrevista</button>
     </div>
     <div class="adm-main" id="adm-main"></div>
   </div>
@@ -3858,7 +3859,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'regional-cota-2026-06-11'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'consulta-entrevista-2026-06-11'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4436,7 +4437,7 @@ function nav(tab) {
   DB.registros  = loadDB('registros',  []);
   /* DB.operadores agora vem do Supabase (sincronizado no login). */
   DB.pausas     = loadDB('pausas',     []);
-  const fns = {dash:pgDash, aovivo:pgAoVivo, gestao:pgGestao, pausas:pgPausas, visaogeral:pgVisaoGeral, chat:pgChat, operadores:pgOperadores, agenteia:pgAgenteIA, pesquisas:pgPesquisas, cotas:pgCotas, telefones:pgTelefones, auditoria:pgAuditoria, resultados:pgResultados, relatorio:pgRelatorio, ponderacao:pgPonderacao, exportar:pgExportar};
+  const fns = {dash:pgDash, aovivo:pgAoVivo, gestao:pgGestao, pausas:pgPausas, visaogeral:pgVisaoGeral, chat:pgChat, operadores:pgOperadores, agenteia:pgAgenteIA, pesquisas:pgPesquisas, cotas:pgCotas, telefones:pgTelefones, auditoria:pgAuditoria, resultados:pgResultados, relatorio:pgRelatorio, ponderacao:pgPonderacao, exportar:pgExportar, consulta:pgConsultaEntrevista};
   window._tabAtual = tab;
   if (fns[tab]) fns[tab]();
 
@@ -14953,6 +14954,221 @@ function importarBasePonderacao(input, qid) {
     if (window.XLSX) doRead();
     else { const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=doRead;document.head.appendChild(s); }
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONSULTA DE ENTREVISTA POR TELEFONE  (Feature A)
+// Busca registros pelo número de telefone, exibe o detalhe completo
+// (perguntas + respostas + demografia) e exporta a entrevista
+// individual em PDF ou CSV. Base para edição (B) e impressão (C).
+// ═══════════════════════════════════════════════════════════════
+
+function _ceSoDigitos(s) { return (s == null ? '' : String(s)).replace(/\D/g, ''); }
+
+function pgConsultaEntrevista() {
+  document.getElementById('adm-main').innerHTML = `
+    <div class="card">
+      <div class="card-title">🔎 Consultar entrevista por telefone</div>
+      <div style="font-size:12px;color:#8b95aa;margin-bottom:10px">
+        Digite o telefone em que a entrevista foi realizada (com ou sem DDD).
+        Mostra todas as entrevistas daquele número e permite exportar cada uma.
+      </div>
+      <div class="row" style="align-items:flex-end">
+        <div class="col" style="flex:1;min-width:220px">
+          <label>Telefone</label>
+          <input id="ce-tel" type="text" placeholder="Ex: 41998428402" maxlength="20"
+                 onkeyup="if(event.key==='Enter')_ceBuscar()">
+        </div>
+        <div class="col" style="flex:0">
+          <button class="btn btn-p" onclick="_ceBuscar()">🔎 Buscar</button>
+        </div>
+      </div>
+    </div>
+    <div id="ce-result"></div>`;
+  setTimeout(() => { const el = document.getElementById('ce-tel'); if (el) el.focus(); }, 50);
+}
+
+function _ceBuscar() {
+  const cont = document.getElementById('ce-result');
+  if (!cont) return;
+  const raw = document.getElementById('ce-tel') ? document.getElementById('ce-tel').value : '';
+  const d = _ceSoDigitos(raw);
+  if (d.length < 4) { cont.innerHTML = '<div class="al-info" style="margin:0">Digite ao menos 4 dígitos do telefone.</div>'; return; }
+  DB.registros = loadDB('registros', DB.registros || []);
+  const achados = DB.registros.filter(r => {
+    const t = _ceSoDigitos(r.telefone);
+    return t && (t === d || t.includes(d) || d.includes(t));
+  }).sort((a, b) => String(b.dh || '').localeCompare(String(a.dh || '')));
+
+  if (!achados.length) {
+    cont.innerHTML = `<div class="al-info" style="margin:0">Nenhuma entrevista encontrada para o número <strong>${_escHtmlICR(raw)}</strong>.</div>`;
+    return;
+  }
+
+  const linhas = achados.map(r => {
+    const dt = r.dh ? new Date(r.dh).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
+    const q = DB.pesquisas.find(x => x.id == r.pesquisa_id);
+    const nomeP = q ? nomeQ(q) : (r.pesquisa_nome || '—');
+    const cor = r.status === 1 ? '#1d9e75' : '#5a6478';
+    const badge = `<span style="background:${cor};color:#fff;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:700">${_escHtmlICR(r.status_txt || ('status ' + r.status))}</span>`;
+    return `
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #2a3550;white-space:nowrap">${dt}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #2a3550">${_escHtmlICR(nomeP)}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #2a3550">${_escHtmlICR(r.op_nome || '—')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #2a3550;white-space:nowrap">${_escHtmlICR(r.telefone || '—')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #2a3550">${badge}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #2a3550"><button class="btn btn-sm" onclick="_ceVer(${r.id})">👁 Ver</button></td>
+      </tr>`;
+  }).join('');
+
+  cont.innerHTML = `
+    <div class="card">
+      <div class="card-title">${achados.length} entrevista(s) encontrada(s)</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="text-align:left;color:#8b95aa;font-size:12px">
+            <th style="padding:6px 8px">Data/hora</th><th style="padding:6px 8px">Pesquisa</th>
+            <th style="padding:6px 8px">Operador</th><th style="padding:6px 8px">Telefone</th>
+            <th style="padding:6px 8px">Status</th><th style="padding:6px 8px"></th>
+          </tr></thead>
+          <tbody>${linhas}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function _ceRespValor(reg, p) {
+  const v = (reg.respostas || {})[p.id];
+  if (v == null || v === '') return '';
+  if (Array.isArray(v)) return v.join('; ');
+  return String(v);
+}
+
+function _ceVer(id) {
+  const cont = document.getElementById('ce-result');
+  if (!cont) return;
+  const reg = DB.registros.find(r => r.id == id);
+  if (!reg) { cont.innerHTML = '<div class="al-info" style="margin:0">Entrevista não encontrada (pode ter sido atualizada). Busque novamente.</div>'; return; }
+  const q = DB.pesquisas.find(x => x.id == reg.pesquisa_id);
+  const perguntas = q ? (q.perguntas || []) : [];
+  const dt = reg.dh ? new Date(reg.dh).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
+  const nomeP = q ? nomeQ(q) : (reg.pesquisa_nome || '—');
+
+  const meta = [
+    ['Pesquisa', nomeP],
+    ['Telefone', reg.telefone || '—'],
+    ['Data/hora', dt],
+    ['Operador', reg.op_nome || '—'],
+    ['Status', reg.status_txt || ('status ' + reg.status)],
+    ['Sexo', reg.sexo || '—'],
+    ['Faixa etária', reg.faixa_etaria || '—'],
+    ['Escolaridade', reg.escolaridade || '—'],
+    ['Região', reg.regiao || '—'],
+    ['Duração', reg.duracao_seg ? (reg.duracao_seg + 's') : '—']
+  ].map(([k, v]) => `<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #2a3550"><div style="min-width:120px;color:#8b95aa;font-size:12px">${k}</div><div style="font-size:13px;color:#e8eaf0">${_escHtmlICR(String(v))}</div></div>`).join('');
+
+  const linhasP = perguntas.length ? perguntas.map((p, i) => {
+    const val = _ceRespValor(reg, p);
+    const valHtml = val ? _escHtmlICR(val) : '<span style="color:#8b95aa;font-style:italic">— sem resposta —</span>';
+    return `
+      <div style="padding:8px 0;border-bottom:1px solid #2a3550">
+        <div style="font-size:12px;color:#8b95aa">${i + 1}. ${p.var_cod ? '[' + _escHtmlICR(p.var_cod) + '] ' : ''}<span style="color:#F0B840">${_escHtmlICR(p.tipo || '')}</span></div>
+        <div style="font-size:13px;color:#e8eaf0;margin:2px 0 4px">${_escHtmlICR(p.txt || '(sem enunciado)')}</div>
+        <div style="font-size:14px;font-weight:700;color:#FF6B2B">${valHtml}</div>
+      </div>`;
+  }).join('') : '<div class="al-info" style="margin:0">Esta pesquisa não tem perguntas cadastradas localmente.</div>';
+
+  cont.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <button class="btn btn-sm" onclick="_ceBuscar()">← Voltar aos resultados</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm" style="color:#e05252;border-color:#e05252" onclick="_ceExportarPDF(${reg.id})">📄 Exportar PDF</button>
+          <button class="btn btn-p btn-sm" onclick="_ceExportarCSV(${reg.id})">📊 Exportar CSV</button>
+        </div>
+      </div>
+      <div class="card-title">Entrevista #${reg.id}</div>
+      <div style="margin-bottom:14px">${meta}</div>
+      <div style="font-size:13px;font-weight:700;color:#FF4D00;margin-bottom:4px">Respostas</div>
+      ${linhasP}
+    </div>`;
+}
+
+function _ceLinhasExport(reg) {
+  const q = DB.pesquisas.find(x => x.id == reg.pesquisa_id);
+  const perguntas = q ? (q.perguntas || []) : [];
+  const dt = reg.dh ? new Date(reg.dh).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
+  const linhas = [
+    ['Pesquisa', q ? nomeQ(q) : (reg.pesquisa_nome || '')],
+    ['Telefone', reg.telefone || ''],
+    ['Data/hora', dt],
+    ['Operador', reg.op_nome || ''],
+    ['Status', reg.status_txt || ('status ' + reg.status)],
+    ['Sexo', reg.sexo || ''],
+    ['Faixa etária', reg.faixa_etaria || ''],
+    ['Escolaridade', reg.escolaridade || ''],
+    ['Região', reg.regiao || ''],
+    ['Duração (s)', reg.duracao_seg != null ? String(reg.duracao_seg) : '']
+  ];
+  perguntas.forEach((p, i) => {
+    const cab = (i + 1) + '. ' + (p.var_cod ? '[' + p.var_cod + '] ' : '') + (p.txt || '');
+    linhas.push([cab, _ceRespValor(reg, p)]);
+  });
+  return linhas;
+}
+
+function _ceCsvEsc(s) {
+  s = (s == null ? '' : String(s));
+  return /[;"\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function _ceExportarCSV(id) {
+  const reg = DB.registros.find(r => r.id == id);
+  if (!reg) { toast('Entrevista não encontrada'); return; }
+  const linhas = _ceLinhasExport(reg);
+  const csv = 'Campo;Resposta\n' + linhas.map(([k, v]) => _ceCsvEsc(k) + ';' + _ceCsvEsc(v)).join('\n');
+  const nome = 'entrevista_' + _ceSoDigitos(reg.telefone || ('id' + reg.id)) + '_' + reg.id + '.csv';
+  dl(csv, nome, 'text/csv;charset=utf-8');
+  toast('✓ CSV exportado');
+}
+
+function _ceExportarPDF(id) {
+  const reg = DB.registros.find(r => r.id == id);
+  if (!reg) { toast('Entrevista não encontrada'); return; }
+  const jsPDFCtor = window.jspdf && window.jspdf.jsPDF ? window.jspdf.jsPDF : window.jsPDF;
+  if (!jsPDFCtor) { toast('❌ jsPDF não carregou'); return; }
+  const doc = new jsPDFCtor({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const W = 210, M = 14, maxW = W - M * 2;
+  let y = 16;
+  const q = DB.pesquisas.find(x => x.id == reg.pesquisa_id);
+  doc.setFontSize(14); doc.setTextColor(0);
+  doc.text('Entrevista #' + reg.id, M, y); y += 7;
+  doc.setFontSize(10); doc.setTextColor(90);
+  doc.text(String(q ? nomeQ(q) : (reg.pesquisa_nome || '')), M, y); y += 8;
+  doc.setTextColor(0);
+
+  const linhas = _ceLinhasExport(reg);
+  const nPerg = (q ? (q.perguntas || []).length : 0);
+  const metaCount = linhas.length - nPerg;
+  linhas.forEach(([k, v], idx) => {
+    if (idx === metaCount) {
+      y += 2;
+      doc.setFontSize(11); doc.setTextColor(0);
+      if (y > 285) { doc.addPage(); y = 16; }
+      doc.text('Respostas', M, y); y += 6;
+    }
+    doc.setFontSize(9); doc.setTextColor(110);
+    const kLines = doc.splitTextToSize(String(k), maxW);
+    kLines.forEach(l => { if (y > 285) { doc.addPage(); y = 16; } doc.text(l, M, y); y += 4.5; });
+    doc.setFontSize(10); doc.setTextColor(0);
+    const vLines = doc.splitTextToSize(String(v || '—'), maxW);
+    vLines.forEach(l => { if (y > 285) { doc.addPage(); y = 16; } doc.text(l, M, y); y += 5; });
+    y += 1.5;
+  });
+  const nome = 'entrevista_' + _ceSoDigitos(reg.telefone || ('id' + reg.id)) + '_' + reg.id + '.pdf';
+  doc.save(nome);
+  toast('✓ PDF exportado');
 }
 
 function pgExportar() {
