@@ -3653,6 +3653,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       <div class="sn-lbl">DADOS</div>
       <button class="sn-btn"   id="sn-resultados"   onclick="nav('resultados')">📊 Resultados</button>
       <button class="sn-btn"   id="sn-relatorio"    onclick="nav('relatorio')">📄 Relatório</button>
+      <button class="sn-btn" id="sn-abertas" onclick="nav('abertas')">🗂 Respostas Abertas</button>
       <button class="sn-btn"   id="sn-ponderacao"   onclick="nav('ponderacao')">⚖ Ponderação</button>
       <button class="sn-btn"   id="sn-exportar"     onclick="nav('exportar')">💾 Exportar</button>
       <button class="sn-btn" id="sn-consulta" onclick="nav('consulta')">🔎 Consultar Entrevista</button>
@@ -3859,7 +3860,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'editar-entrevista-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'respostas-abertas-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4437,7 +4438,7 @@ function nav(tab) {
   DB.registros  = loadDB('registros',  []);
   /* DB.operadores agora vem do Supabase (sincronizado no login). */
   DB.pausas     = loadDB('pausas',     []);
-  const fns = {dash:pgDash, aovivo:pgAoVivo, gestao:pgGestao, pausas:pgPausas, visaogeral:pgVisaoGeral, chat:pgChat, operadores:pgOperadores, agenteia:pgAgenteIA, pesquisas:pgPesquisas, cotas:pgCotas, telefones:pgTelefones, auditoria:pgAuditoria, resultados:pgResultados, relatorio:pgRelatorio, ponderacao:pgPonderacao, exportar:pgExportar, consulta:pgConsultaEntrevista};
+  const fns = {dash:pgDash, aovivo:pgAoVivo, gestao:pgGestao, pausas:pgPausas, visaogeral:pgVisaoGeral, chat:pgChat, operadores:pgOperadores, agenteia:pgAgenteIA, pesquisas:pgPesquisas, cotas:pgCotas, telefones:pgTelefones, auditoria:pgAuditoria, resultados:pgResultados, relatorio:pgRelatorio, ponderacao:pgPonderacao, exportar:pgExportar, consulta:pgConsultaEntrevista, abertas:pgRespostasAbertas};
   window._tabAtual = tab;
   if (fns[tab]) fns[tab]();
 
@@ -15367,6 +15368,298 @@ async function _ceSalvarEdicao(id) {
   }
   toast('✓ Entrevista atualizada e registros re-sincronizados (cotas atualizadas)');
   _ceVer(id);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RESPOSTAS ABERTAS — pós-codificação (agrupamento/padronização) +
+// relatório de frequência. NÃO altera as respostas originais; guarda
+// um "de-para" (codebook) no banco via RPCs get_codebook/upsert_codebook.
+// Acesso: admin (todas as pesquisas) / supervisor (só as suas).
+// ═══════════════════════════════════════════════════════════════
+
+var _raState = { pid: '', pidKey: '', perg: null, pergKey: '', distintas: [], total: 0, categorias: [], mapa: {} };
+
+function _raNorm(s) { return String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g, ' '); }
+
+function _raEhAberta(p) {
+  if (!p) return false;
+  if (p.tipo === 'aberta') return true;
+  if (p.tipo === 'escala5') return false;
+  if (typeof _ceTipoIdade === 'function' && _ceTipoIdade(p)) return false;
+  return _ceOptsDoTipo(p).length === 0;
+}
+
+function pgRespostasAbertas() {
+  if (!_ehAdminOuSupervisor()) {
+    document.getElementById('adm-main').innerHTML = '<div class="card"><div class="al-info" style="margin:0">Sem permissão para esta área.</div></div>';
+    return;
+  }
+  _raState = { pid: '', pidKey: '', perg: null, pergKey: '', distintas: [], total: 0, categorias: [], mapa: {} };
+  const qs = _filtrarPesquisasDoSupervisor(DB.pesquisas);
+  const qOpts = '<option value="">Selecione…</option>' + qs.map(q => `<option value="${q.id}">${_escHtmlICR(nomeQ(q))}</option>`).join('');
+  document.getElementById('adm-main').innerHTML = `
+    <div class="card">
+      <div class="card-title">🗂 Respostas abertas — agrupar e relatar</div>
+      <div style="font-size:12px;color:#8b95aa;margin-bottom:10px">
+        Padronize as variações de texto (ex.: "saude", "Saúde") em grupos e gere o relatório de frequência.
+        As respostas originais das entrevistas <strong>não são alteradas</strong> — fica só um de-para.
+      </div>
+      <div class="row" style="align-items:flex-end">
+        <div class="col" style="flex:1;min-width:220px">
+          <label>Pesquisa</label>
+          <select id="ra-q" onchange="_raSelPesquisa()">${qOpts}</select>
+        </div>
+        <div class="col" style="flex:1;min-width:220px">
+          <label>Pergunta aberta</label>
+          <select id="ra-p" onchange="_raCarregar()"><option value="">—</option></select>
+        </div>
+      </div>
+    </div>
+    <div id="ra-result"></div>`;
+}
+
+function _raSelPesquisa() {
+  const pid = document.getElementById('ra-q').value;
+  const selP = document.getElementById('ra-p');
+  document.getElementById('ra-result').innerHTML = '';
+  if (!pid) { selP.innerHTML = '<option value="">—</option>'; return; }
+  const q = DB.pesquisas.find(x => String(x.id) === String(pid));
+  const abertas = q ? (q.perguntas || []).filter(_raEhAberta) : [];
+  if (!abertas.length) { selP.innerHTML = '<option value="">(nenhuma pergunta aberta)</option>'; return; }
+  selP.innerHTML = '<option value="">Selecione…</option>' + abertas.map((p, i) =>
+    `<option value="${p.id}">${i + 1}. ${_escHtmlICR((p.var_cod ? ('[' + p.var_cod + '] ') : '') + String(p.txt || '').slice(0, 70))}</option>`).join('');
+}
+
+async function _raCarregar() {
+  const cont = document.getElementById('ra-result');
+  const pid = document.getElementById('ra-q').value;
+  const pgid = document.getElementById('ra-p').value;
+  if (!pid || !pgid) { cont.innerHTML = ''; return; }
+  const q = DB.pesquisas.find(x => String(x.id) === String(pid));
+  if (!q || !_filtrarPesquisasDoSupervisor(DB.pesquisas).some(qx => String(qx.id) === String(pid))) {
+    cont.innerHTML = '<div class="card"><div class="al-info" style="margin:0">Acesso negado a esta pesquisa.</div></div>'; return;
+  }
+  const perg = (q.perguntas || []).find(p => String(p.id) === String(pgid));
+  if (!perg) { cont.innerHTML = ''; return; }
+  cont.innerHTML = '<div class="card"><div class="al-info" style="margin:0">Carregando respostas…</div></div>';
+
+  DB.registros = loadDB('registros', DB.registros || []);
+  if (typeof window._hidratarRegistrosDoBanco === 'function') {
+    try { await window._hidratarRegistrosDoBanco(false); } catch (e) {}
+    DB.registros = loadDB('registros', DB.registros || []);
+  }
+
+  const mapCount = {};
+  let total = 0;
+  DB.registros.forEach(r => {
+    if (String(r.pesquisa_id) !== String(q.id)) return;
+    if (r.status !== 1) return;
+    let v = (r.respostas || {})[perg.id];
+    if (Array.isArray(v)) v = v.join(' ');
+    if (v == null) return;
+    v = String(v).trim();
+    if (!v) return;
+    total++;
+    const key = _raNorm(v);
+    if (!mapCount[key]) mapCount[key] = { raw: v, key: key, count: 0 };
+    mapCount[key].count++;
+  });
+  const distintas = Object.keys(mapCount).map(k => mapCount[k]).sort((a, b) => b.count - a.count);
+
+  let categorias = [], mapa = {};
+  try {
+    const resp = await window.supabaseClient.rpc('get_codebook', { p_pesquisa_id: String(q.banco_id || q.id), p_pergunta_id: String(perg.id) });
+    const row = resp && resp.data && resp.data[0];
+    if (row) {
+      categorias = Array.isArray(row.categorias) ? row.categorias : (row.categorias ? JSON.parse(row.categorias) : []);
+      mapa = (row.mapa && typeof row.mapa === 'object') ? row.mapa : (row.mapa ? JSON.parse(row.mapa) : {});
+    }
+  } catch (e) { /* segue sem codebook salvo */ }
+
+  _raState = { pid: String(q.id), pidKey: String(q.banco_id || q.id), perg: perg, pergKey: String(perg.id), distintas: distintas, total: total, categorias: categorias, mapa: mapa };
+  _raRender();
+}
+
+function _raStatCard(lbl, val, cor) {
+  return `<div style="background:#1a2236;border:0.5px solid #2a3550;border-radius:8px;padding:8px 12px;min-width:110px">
+    <div style="font-size:11px;color:#8b95aa">${lbl}</div>
+    <div style="font-size:20px;font-weight:700;color:${cor || '#e8eaf0'}">${val}</div></div>`;
+}
+
+function _raRender() {
+  const cont = document.getElementById('ra-result');
+  const st = _raState;
+  const classificadas = st.distintas.filter(d => st.mapa[d.key]).reduce((s, d) => s + d.count, 0);
+
+  const rows = st.distintas.map((d, i) => {
+    const cur = st.mapa[d.key] || '';
+    const opts = st.categorias.map(c => `<option value="${_escapeAttr(c)}" ${cur === c ? 'selected' : ''}>${_escHtmlICR(c)}</option>`).join('');
+    return `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #2a3550">
+      <span style="flex:1;font-size:13px;color:#e8eaf0">${_escHtmlICR(d.raw)}</span>
+      <span style="font-size:11px;color:#8b95aa;background:#222b40;padding:1px 7px;border-radius:10px">${d.count}</span>
+      <select style="min-width:150px" onchange="_raSetCat(${i}, this.value)">
+        <option value="">— não classificada —</option>
+        ${opts}
+        <option value="__nova__">+ nova categoria…</option>
+      </select>
+    </div>`;
+  }).join('');
+
+  const cats = st.categorias.map((c, i) => {
+    const tot = st.distintas.filter(d => st.mapa[d.key] === c).reduce((s, d) => s + d.count, 0);
+    return `<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border:0.5px solid #3a4560;border-radius:8px;margin-bottom:6px">
+      <span style="flex:1;font-size:13px;color:#e8eaf0">${_escHtmlICR(c)}</span>
+      <span style="font-size:11px;color:#1d9e75;font-weight:700">${tot}</span>
+      <button class="btn btn-sm" onclick="_raRenomear(${i})">✏</button>
+      <button class="btn btn-sm" onclick="_raRemoverCat(${i})">🗑</button>
+    </div>`;
+  }).join('') || '<div style="font-size:12px;color:#8b95aa">Nenhuma categoria ainda. Use "+ nova categoria…" ao lado de uma resposta, ou o botão acima.</div>';
+
+  cont.innerHTML = `
+    <div class="card">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        ${_raStatCard('Respostas', st.total)}
+        ${_raStatCard('Textos distintos', st.distintas.length)}
+        ${_raStatCard('Classificadas', classificadas, '#1d9e75')}
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="_raNovaCategoria()">+ Nova categoria</button>
+        <button class="btn btn-p btn-sm" onclick="_raSalvar()">💾 Salvar agrupamento</button>
+        <button class="btn btn-sm" style="color:#F0B840;border-color:#F0B840" onclick="_raRelatorio()">📊 Gerar relatório</button>
+      </div>
+      <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#FF4D00;margin-bottom:4px">Respostas distintas</div>
+          ${rows || '<div class="al-info" style="margin:0">Sem respostas válidas para esta pergunta.</div>'}
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#FF4D00;margin-bottom:4px">Categorias (grupos)</div>
+          ${cats}
+        </div>
+      </div>
+    </div>
+    <div id="ra-rel"></div>`;
+}
+
+function _raSetCat(i, value) {
+  const d = _raState.distintas[i];
+  if (!d) return;
+  if (value === '__nova__') {
+    const nome = (prompt('Nome da nova categoria:') || '').trim();
+    if (!nome) { _raRender(); return; }
+    if (!_raState.categorias.includes(nome)) _raState.categorias.push(nome);
+    _raState.mapa[d.key] = nome;
+  } else if (value === '') {
+    delete _raState.mapa[d.key];
+  } else {
+    _raState.mapa[d.key] = value;
+  }
+  _raRender();
+}
+
+function _raNovaCategoria() {
+  const nome = (prompt('Nome da nova categoria:') || '').trim();
+  if (!nome) return;
+  if (!_raState.categorias.includes(nome)) _raState.categorias.push(nome);
+  _raRender();
+}
+
+function _raRenomear(i) {
+  const antigo = _raState.categorias[i];
+  const novo = (prompt('Renomear categoria:', antigo) || '').trim();
+  if (!novo || novo === antigo) return;
+  _raState.categorias[i] = novo;
+  Object.keys(_raState.mapa).forEach(k => { if (_raState.mapa[k] === antigo) _raState.mapa[k] = novo; });
+  _raRender();
+}
+
+function _raRemoverCat(i) {
+  const c = _raState.categorias[i];
+  if (!confirm('Remover a categoria "' + c + '"? As respostas dela voltam a "não classificadas".')) return;
+  _raState.categorias.splice(i, 1);
+  Object.keys(_raState.mapa).forEach(k => { if (_raState.mapa[k] === c) delete _raState.mapa[k]; });
+  _raRender();
+}
+
+async function _raSalvar() {
+  if (!window.supabaseClient) { toast('Sem conexão com o banco'); return; }
+  try {
+    const resp = await window.supabaseClient.rpc('upsert_codebook', {
+      p_pesquisa_id: _raState.pidKey,
+      p_pergunta_id: _raState.pergKey,
+      p_categorias: _raState.categorias,
+      p_mapa: _raState.mapa,
+      p_por: (sessao && sessao.nome) ? sessao.nome : ((sessao && sessao.id) ? String(sessao.id) : null)
+    });
+    if (resp && resp.error) { toast('❌ Erro ao salvar: ' + (resp.error.message || resp.error)); return; }
+    toast('✓ Agrupamento salvo no banco');
+  } catch (e) { toast('❌ Falha ao salvar: ' + (e && e.message ? e.message : e)); }
+}
+
+function _raCalcFreq() {
+  const st = _raState;
+  const porCat = {};
+  st.categorias.forEach(c => porCat[c] = 0);
+  let naoClass = 0;
+  st.distintas.forEach(d => {
+    const c = st.mapa[d.key];
+    if (c) porCat[c] = (porCat[c] || 0) + d.count;
+    else naoClass += d.count;
+  });
+  const linhas = Object.keys(porCat).map(c => ({ cat: c, n: porCat[c] })).sort((a, b) => b.n - a.n);
+  return { linhas: linhas, naoClass: naoClass, total: st.total };
+}
+
+function _raRelatorio() {
+  const r = _raCalcFreq();
+  const rel = document.getElementById('ra-rel');
+  const pct = n => r.total ? ((n / r.total * 100).toFixed(1) + '%') : '0%';
+  const trs = r.linhas.map(l => `<tr><td style="padding:5px 8px;border-bottom:1px solid #2a3550">${_escHtmlICR(l.cat)}</td><td style="padding:5px 8px;border-bottom:1px solid #2a3550;text-align:right">${l.n}</td><td style="padding:5px 8px;border-bottom:1px solid #2a3550;text-align:right">${pct(l.n)}</td></tr>`).join('');
+  const trNC = r.naoClass ? `<tr><td style="padding:5px 8px;color:#8b95aa">não classificadas</td><td style="padding:5px 8px;text-align:right;color:#8b95aa">${r.naoClass}</td><td style="padding:5px 8px;text-align:right;color:#8b95aa">${pct(r.naoClass)}</td></tr>` : '';
+  rel.innerHTML = `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <div class="card-title" style="margin:0">Relatório de frequência</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" style="color:#e05252;border-color:#e05252" onclick="_raExportPDF()">📄 PDF</button>
+        <button class="btn btn-p btn-sm" onclick="_raExportCSV()">📊 CSV</button>
+      </div>
+    </div>
+    <div style="font-size:12px;color:#8b95aa;margin-bottom:6px">${_escHtmlICR(_raState.perg.txt || '')} — base: ${r.total} respostas válidas</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="text-align:left;color:#8b95aa;font-size:12px"><th style="padding:5px 8px">Categoria</th><th style="padding:5px 8px;text-align:right">Qtd</th><th style="padding:5px 8px;text-align:right">%</th></tr></thead>
+      <tbody>${trs}${trNC}</tbody>
+    </table>
+  </div>`;
+}
+
+function _raExportCSV() {
+  const r = _raCalcFreq();
+  const esc = s => /[;"\n\r]/.test(String(s)) ? '"' + String(s).replace(/"/g, '""') + '"' : String(s);
+  const pct = n => r.total ? (n / r.total * 100).toFixed(1).replace('.', ',') + '%' : '0%';
+  let csv = 'Categoria;Quantidade;Percentual\n';
+  r.linhas.forEach(l => { csv += esc(l.cat) + ';' + l.n + ';' + pct(l.n) + '\n'; });
+  if (r.naoClass) csv += 'não classificadas;' + r.naoClass + ';' + pct(r.naoClass) + '\n';
+  csv += 'TOTAL;' + r.total + ';100%\n';
+  dl(csv, 'relatorio_aberta_' + _raState.pergKey + '.csv', 'text/csv;charset=utf-8');
+  toast('✓ CSV exportado');
+}
+
+function _raExportPDF() {
+  const jsPDFCtor = window.jspdf && window.jspdf.jsPDF ? window.jspdf.jsPDF : window.jsPDF;
+  if (!jsPDFCtor) { toast('❌ jsPDF não carregou'); return; }
+  const r = _raCalcFreq();
+  const doc = new jsPDFCtor({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const M = 14; let y = 16;
+  const pct = n => r.total ? (n / r.total * 100).toFixed(1) + '%' : '0%';
+  doc.setFontSize(13); doc.setTextColor(0); doc.text('Relatório de respostas abertas', M, y); y += 7;
+  doc.setFontSize(9); doc.setTextColor(90);
+  doc.splitTextToSize(String(_raState.perg.txt || ''), 182).forEach(l => { if (y > 285) { doc.addPage(); y = 16; } doc.text(l, M, y); y += 4.5; });
+  doc.setTextColor(0); doc.setFontSize(10); doc.text('Base: ' + r.total + ' respostas válidas', M, y); y += 7;
+  doc.setFontSize(9); doc.setTextColor(110); doc.text('CATEGORIA', M, y); doc.text('QTD', 150, y); doc.text('%', 175, y); y += 5; doc.setTextColor(0); doc.setFontSize(10);
+  r.linhas.forEach(l => { if (y > 285) { doc.addPage(); y = 16; } doc.text(String(l.cat), M, y); doc.text(String(l.n), 150, y); doc.text(pct(l.n), 175, y); y += 6; });
+  if (r.naoClass) { if (y > 285) { doc.addPage(); y = 16; } doc.setTextColor(120); doc.text('não classificadas', M, y); doc.text(String(r.naoClass), 150, y); doc.text(pct(r.naoClass), 175, y); y += 6; doc.setTextColor(0); }
+  doc.save('relatorio_aberta_' + _raState.pergKey + '.pdf');
+  toast('✓ PDF exportado');
 }
 
 function pgExportar() {
