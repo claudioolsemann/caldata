@@ -3860,7 +3860,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'respostas-abertas-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'respostas-agrupar-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -15399,9 +15399,9 @@ function pgRespostasAbertas() {
   const qOpts = '<option value="">Selecione…</option>' + qs.map(q => `<option value="${q.id}">${_escHtmlICR(nomeQ(q))}</option>`).join('');
   document.getElementById('adm-main').innerHTML = `
     <div class="card">
-      <div class="card-title">🗂 Respostas abertas — agrupar e relatar</div>
+      <div class="card-title">🗂 Agrupar respostas e gerar relatório</div>
       <div style="font-size:12px;color:#8b95aa;margin-bottom:10px">
-        Padronize as variações de texto (ex.: "saude", "Saúde") em grupos e gere o relatório de frequência.
+        Agrupe/padronize as respostas (texto livre <em>ou</em> opções de pergunta fechada) em categorias e gere o relatório de frequência.
         As respostas originais das entrevistas <strong>não são alteradas</strong> — fica só um de-para.
       </div>
       <div class="row" style="align-items:flex-end">
@@ -15410,7 +15410,7 @@ function pgRespostasAbertas() {
           <select id="ra-q" onchange="_raSelPesquisa()">${qOpts}</select>
         </div>
         <div class="col" style="flex:1;min-width:220px">
-          <label>Pergunta aberta</label>
+          <label>Pergunta</label>
           <select id="ra-p" onchange="_raCarregar()"><option value="">—</option></select>
         </div>
       </div>
@@ -15424,10 +15424,12 @@ function _raSelPesquisa() {
   document.getElementById('ra-result').innerHTML = '';
   if (!pid) { selP.innerHTML = '<option value="">—</option>'; return; }
   const q = DB.pesquisas.find(x => String(x.id) === String(pid));
-  const abertas = q ? (q.perguntas || []).filter(_raEhAberta) : [];
-  if (!abertas.length) { selP.innerHTML = '<option value="">(nenhuma pergunta aberta)</option>'; return; }
-  selP.innerHTML = '<option value="">Selecione…</option>' + abertas.map((p, i) =>
-    `<option value="${p.id}">${i + 1}. ${_escHtmlICR((p.var_cod ? ('[' + p.var_cod + '] ') : '') + String(p.txt || '').slice(0, 70))}</option>`).join('');
+  const pergs = q ? (q.perguntas || []) : [];
+  if (!pergs.length) { selP.innerHTML = '<option value="">(sem perguntas)</option>'; return; }
+  selP.innerHTML = '<option value="">Selecione…</option>' + pergs.map((p, i) => {
+    const tag = _raEhAberta(p) ? 'aberta' : 'fechada';
+    return `<option value="${p.id}">${i + 1}. [${tag}] ${_escHtmlICR((p.var_cod ? ('[' + p.var_cod + '] ') : '') + String(p.txt || '').slice(0, 60))}</option>`;
+  }).join('');
 }
 
 async function _raCarregar() {
@@ -15453,7 +15455,6 @@ async function _raCarregar() {
   let total = 0;
   DB.registros.forEach(r => {
     if (String(r.pesquisa_id) !== String(q.id)) return;
-    if (r.status !== 1) return;
     let v = (r.respostas || {})[perg.id];
     if (Array.isArray(v)) v = v.join(' ');
     if (v == null) return;
@@ -15530,7 +15531,7 @@ function _raRender() {
       <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px">
         <div>
           <div style="font-size:13px;font-weight:700;color:#FF4D00;margin-bottom:4px">Respostas distintas</div>
-          ${rows || '<div class="al-info" style="margin:0">Sem respostas válidas para esta pergunta.</div>'}
+          ${rows || '<div class="al-info" style="margin:0">Sem respostas para esta pergunta.</div>'}
         </div>
         <div>
           <div style="font-size:13px;font-weight:700;color:#FF4D00;margin-bottom:4px">Categorias (grupos)</div>
@@ -15624,7 +15625,7 @@ function _raRelatorio() {
         <button class="btn btn-p btn-sm" onclick="_raExportCSV()">📊 CSV</button>
       </div>
     </div>
-    <div style="font-size:12px;color:#8b95aa;margin-bottom:6px">${_escHtmlICR(_raState.perg.txt || '')} — base: ${r.total} respostas válidas</div>
+    <div style="font-size:12px;color:#8b95aa;margin-bottom:6px">${_escHtmlICR(_raState.perg.txt || '')} — base: ${r.total} respostas</div>
     <table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="text-align:left;color:#8b95aa;font-size:12px"><th style="padding:5px 8px">Categoria</th><th style="padding:5px 8px;text-align:right">Qtd</th><th style="padding:5px 8px;text-align:right">%</th></tr></thead>
       <tbody>${trs}${trNC}</tbody>
@@ -15654,7 +15655,7 @@ function _raExportPDF() {
   doc.setFontSize(13); doc.setTextColor(0); doc.text('Relatório de respostas abertas', M, y); y += 7;
   doc.setFontSize(9); doc.setTextColor(90);
   doc.splitTextToSize(String(_raState.perg.txt || ''), 182).forEach(l => { if (y > 285) { doc.addPage(); y = 16; } doc.text(l, M, y); y += 4.5; });
-  doc.setTextColor(0); doc.setFontSize(10); doc.text('Base: ' + r.total + ' respostas válidas', M, y); y += 7;
+  doc.setTextColor(0); doc.setFontSize(10); doc.text('Base: ' + r.total + ' respostas', M, y); y += 7;
   doc.setFontSize(9); doc.setTextColor(110); doc.text('CATEGORIA', M, y); doc.text('QTD', 150, y); doc.text('%', 175, y); y += 5; doc.setTextColor(0); doc.setFontSize(10);
   r.linhas.forEach(l => { if (y > 285) { doc.addPage(); y = 16; } doc.text(String(l.cat), M, y); doc.text(String(l.n), 150, y); doc.text(pct(l.n), 175, y); y += 6; });
   if (r.naoClass) { if (y > 285) { doc.addPage(); y = 16; } doc.setTextColor(120); doc.text('não classificadas', M, y); doc.text(String(r.naoClass), 150, y); doc.text(pct(r.naoClass), 175, y); y += 6; doc.setTextColor(0); }
