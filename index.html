@@ -15002,105 +15002,55 @@ function importarQuestionarioExterno(input, qid) {
         const total = linhasDados.length;
         if (!total) { if (statusEl) statusEl.textContent = '⚠ Nenhuma linha de dados encontrada.'; return; }
 
-        if (statusEl) statusEl.textContent = `⏳ Importando ${total} registros...`;
-        if (progressEl) progressEl.innerHTML = `
-          <div style="background:#2e3850;border-radius:6px;height:8px;overflow:hidden;margin-bottom:6px">
-            <div id="pond-ext-bar" style="height:100%;background:#2dc98e;width:0%;transition:width .3s"></div>
-          </div>
-          <div id="pond-ext-pct" style="font-size:11px;color:#8b95aa">0 / ${total}</div>`;
-
-        let ok = 0, falha = 0, semTel = 0;
-        const opId = sessao?.id || null;
-
-        for (let i = 0; i < linhasDados.length; i++) {
-          const row = linhasDados[i];
-
-          // Telefone
-          const telRaw = row[idxTel] == null ? '' : String(row[idxTel]).replace(/\D/g, '');
-          if (!telRaw || (telRaw.length < 10 || telRaw.length > 11)) { semTel++; continue; }
-
-          // Demográficos
-          const sexo       = normDemo(idxSexo   >= 0 ? row[idxSexo]   : null);
-          const faixaEt    = normDemo(idxIdade  >= 0 ? row[idxIdade]  : null);
-          const escolar    = normDemo(idxInstr  >= 0 ? row[idxInstr]  : null);
-          const regiao     = normDemo(idxRegiao >= 0 ? row[idxRegiao] : null);
-
-          // Respostas: { pergunta_id → valor }
-          const respostas = {};
-          Object.entries(colMap).forEach(([cidx, pid]) => {
-            const val = row[parseInt(cidx)];
-            if (val != null && String(val).trim() !== '') {
-              // Usa var_cod se existir, senão id
-              const perg = perguntas.find(p => p.id == pid);
-              const chave = perg?.var_cod ? String(perg.var_cod) : String(pid);
-              respostas[chave] = String(val).trim();
-            }
+        // ── PRÉVIA — monta distribuição antes de gravar qualquer coisa ──
+        function contarDist(idx) {
+          const dist = {};
+          linhasDados.forEach(r => {
+            const v = r[idx] == null ? '(vazio)' : String(r[idx]).trim();
+            dist[v] = (dist[v] || 0) + 1;
           });
-
-          const payload = {
-            pesquisa_id:    parseInt(qid),
-            op_id:          opId,
-            status:         1,
-            status_txt:     'BEM SUCEDIDA',
-            duracao_seg:    0,
-            telefone:       telRaw,
-            telefone_fonte: 'externo',
-            telefone_id:    null,
-            sexo:           sexo || null,
-            idade:          null,
-            faixa_etaria:   faixaEt || null,
-            escolaridade:   escolar || null,
-            renda:          null,
-            regiao:         regiao || null,
-            outras_dimensoes: { origem: 'externo', arquivo: file.name },
-            respostas,
-            dh: new Date().toISOString()
-          };
-
-          if (window.registrosSb) {
-            const r = await window.registrosSb.criarRegistro(payload);
-            if (r.ok) ok++; else { falha++; console.warn('[ext] falha reg', i, r.error); }
-          } else {
-            // Fallback local
-            DB.registros.push({ ...payload, id: Date.now() + i, origem: 'externo' });
-            ok++;
-          }
-
-          // Atualiza progresso a cada 20 registros
-          if (i % 20 === 0 || i === linhasDados.length - 1) {
-            const pct = Math.round((i + 1) / total * 100);
-            const bar = document.getElementById('pond-ext-bar');
-            const pctEl = document.getElementById('pond-ext-pct');
-            if (bar) bar.style.width = pct + '%';
-            if (pctEl) pctEl.textContent = `${i + 1} / ${total}`;
-            await new Promise(r => setTimeout(r, 0)); // yield para render
-          }
+          return Object.entries(dist).sort((a,b) => b[1]-a[1]);
+        }
+        function renderDist(entries, total) {
+          return entries.slice(0,8).map(([v,n]) => {
+            const pct = Math.round(n/total*100);
+            return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+              <div style="font-size:11px;color:#c4cad8;min-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${v}</div>
+              <div style="flex:1;background:#2e3850;border-radius:3px;height:8px">
+                <div style="height:100%;background:#2dc98e;border-radius:3px;width:${pct}%"></div>
+              </div>
+              <div style="font-size:11px;color:#8b95aa;min-width:60px;text-align:right">${n} (${pct}%)</div>
+            </div>`;
+          }).join('') + (entries.length > 8 ? `<div style="font-size:10px;color:#636d88">+ ${entries.length-8} outros valores</div>` : '');
         }
 
-        // Resultado final
-        const msgs = [`✅ ${ok} registros importados com sucesso`];
-        if (semTel > 0) msgs.push(`${semTel} ignorados (sem telefone válido)`);
-        if (falha > 0)  msgs.push(`⚠ ${falha} com erro no banco`);
+        const distSexo   = idxSexo   >= 0 ? contarDist(idxSexo)   : [];
+        const distIdade  = idxIdade  >= 0 ? contarDist(idxIdade)  : [];
+        const distInstr  = idxInstr  >= 0 ? contarDist(idxInstr)  : [];
+        const distRegiao = idxRegiao >= 0 ? contarDist(idxRegiao) : [];
 
-        if (statusEl) statusEl.innerHTML = msgs.map(m => `<span style="margin-right:12px">${m}</span>`).join('');
-        if (progressEl) progressEl.innerHTML = '';
+        if (progressEl) progressEl.innerHTML = `
+          <div style="background:rgba(29,158,117,.08);border-radius:10px;padding:14px;border:1px solid rgba(29,158,117,.25);margin-top:8px">
+            <div style="font-size:14px;font-weight:800;color:#2dc98e;margin-bottom:12px">📋 Prévia — ${total} registros detectados</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:14px">
+              ${distSexo.length ? `<div><div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:6px">SEXO</div>${renderDist(distSexo,total)}</div>` : ''}
+              ${distIdade.length ? `<div><div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:6px">FAIXA ETÁRIA</div>${renderDist(distIdade,total)}</div>` : ''}
+              ${distInstr.length ? `<div><div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:6px">ESCOLARIDADE</div>${renderDist(distInstr,total)}</div>` : ''}
+              ${distRegiao.length ? `<div><div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:6px">REGIÃO</div>${renderDist(distRegiao,total)}</div>` : ''}
+            </div>
+            <div style="font-size:11px;color:#8b95aa;margin-bottom:10px">
+              Colunas mapeadas para perguntas: <strong style="color:#c4cad8">${Object.keys(colMap).length}</strong> de ${header.length - 2} colunas de dados
+            </div>
+            <div style="display:flex;gap:8px">
+              <button onclick="_extConfirmarImport()" class="btn btn-p" style="font-size:13px">✅ Confirmar e importar ${total} registros</button>
+              <button onclick="_extCancelarImport()" class="btn" style="font-size:13px">Cancelar</button>
+            </div>
+          </div>`;
 
-        salvarTudo();
-        toast(`✓ ${ok} registros externos importados`);
+        if (statusEl) statusEl.textContent = `${total} registros prontos para importar — revise e confirme.`;
 
-        // Força hidratação para refletir na situação atual
-        if (window.registrosSb) {
-          try {
-            const r2 = await window.registrosSb.listarRegistros({ pesquisa_id: parseInt(qid), limit: 5000 });
-            if (r2.ok && r2.data) {
-              r2.data.forEach(reg => {
-                if (!DB.registros.find(x => x.id === reg.id)) DB.registros.push(reg);
-              });
-            }
-          } catch(e) {}
-        }
-
-        renderPonderacao();
+        // Guarda dados para confirmar depois
+        window._extPendente = { linhasDados, colMap, idxTel, idxSexo, idxIdade, idxInstr, idxRegiao, qid, file, perguntas, statusEl, progressEl };
 
       } catch(err) {
         console.error('[importarQuestionarioExterno]', err);
@@ -15118,6 +15068,122 @@ function importarQuestionarioExterno(input, qid) {
     s.onerror = () => { if (statusEl) statusEl.textContent = '⚠ Não foi possível carregar biblioteca xlsx.'; };
     document.head.appendChild(s);
   }
+}
+
+function _extCancelarImport() {
+  window._extPendente = null;
+  const progressEl = document.getElementById('pond-ext-progress');
+  const statusEl   = document.getElementById('pond-ext-status');
+  if (progressEl) progressEl.innerHTML = '';
+  if (statusEl)   statusEl.textContent = 'Importação cancelada.';
+}
+
+async function _extConfirmarImport() {
+  const p = window._extPendente;
+  if (!p) return;
+  window._extPendente = null;
+
+  const { linhasDados, colMap, idxTel, idxSexo, idxIdade, idxInstr, idxRegiao, qid, file, perguntas, statusEl, progressEl } = p;
+  const total = linhasDados.length;
+  const opId  = sessao?.id || null;
+
+  if (progressEl) progressEl.innerHTML = `
+    <div style="background:#2e3850;border-radius:6px;height:8px;overflow:hidden;margin-bottom:6px">
+      <div id="pond-ext-bar" style="height:100%;background:#2dc98e;width:0%;transition:width .3s"></div>
+    </div>
+    <div id="pond-ext-pct" style="font-size:11px;color:#8b95aa">0 / ${total}</div>`;
+  if (statusEl) statusEl.textContent = `⏳ Importando ${total} registros...`;
+
+  let ok = 0, falha = 0;
+
+  for (let i = 0; i < linhasDados.length; i++) {
+    const row = linhasDados[i];
+
+    // Telefone — aceita qualquer valor, sem validação de tamanho
+    const telRaw = row[idxTel] == null ? '' : String(row[idxTel]).replace(/[^\d]/g, '');
+
+    // Demográficos
+    const sexo    = idxSexo   >= 0 && row[idxSexo]   != null ? String(row[idxSexo]).trim()   : null;
+    const faixaEt = idxIdade  >= 0 && row[idxIdade]  != null ? String(row[idxIdade]).trim()  : null;
+    const escolar = idxInstr  >= 0 && row[idxInstr]  != null ? String(row[idxInstr]).trim()  : null;
+    const regiao  = idxRegiao >= 0 && row[idxRegiao] != null ? String(row[idxRegiao]).trim()  : null;
+
+    // Respostas: { chave → valor }
+    const respostas = {};
+    Object.entries(colMap).forEach(([cidx, pid]) => {
+      const val = row[parseInt(cidx)];
+      if (val != null && String(val).trim() !== '') {
+        const perg = perguntas.find(pp => pp.id == pid);
+        const chave = perg?.var_cod ? String(perg.var_cod) : String(pid);
+        respostas[chave] = String(val).trim();
+      }
+    });
+
+    const payload = {
+      pesquisa_id:      parseInt(qid),
+      op_id:            opId,
+      status:           1,
+      status_txt:       'BEM SUCEDIDA',
+      duracao_seg:      0,
+      telefone:         telRaw || null,
+      telefone_fonte:   'externo',
+      telefone_id:      null,
+      sexo:             sexo || null,
+      idade:            null,
+      faixa_etaria:     faixaEt || null,
+      escolaridade:     escolar || null,
+      renda:            null,
+      regiao:           regiao || null,
+      outras_dimensoes: { origem: 'externo', arquivo: file.name },
+      respostas,
+      dh:               new Date().toISOString()
+    };
+
+    if (window.registrosSb) {
+      const r = await window.registrosSb.criarRegistro(payload);
+      if (r.ok) ok++;
+      else {
+        falha++;
+        console.warn('[ext] falha reg', i, r.error);
+      }
+    } else {
+      DB.registros.push({ ...payload, id: Date.now() + i, origem: 'externo' });
+      ok++;
+    }
+
+    // Progresso a cada 10 registros
+    if (i % 10 === 0 || i === linhasDados.length - 1) {
+      const pct  = Math.round((i + 1) / total * 100);
+      const bar  = document.getElementById('pond-ext-bar');
+      const pctEl = document.getElementById('pond-ext-pct');
+      if (bar)   bar.style.width = pct + '%';
+      if (pctEl) pctEl.textContent = `${i + 1} / ${total}`;
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  // Resultado
+  const msgs = [`✅ ${ok} registros importados`];
+  if (falha > 0) msgs.push(`⚠ ${falha} com erro no banco`);
+  if (statusEl)   statusEl.innerHTML = msgs.map(m => `<span style="margin-right:12px">${m}</span>`).join('');
+  if (progressEl) progressEl.innerHTML = '';
+
+  salvarTudo();
+  toast(`✓ ${ok} registros externos importados`);
+
+  // Hidrata registros locais
+  if (window.registrosSb) {
+    try {
+      const r2 = await window.registrosSb.listarRegistros({ pesquisa_id: parseInt(qid), limit: 5000 });
+      if (r2.ok && r2.data) {
+        r2.data.forEach(reg => {
+          if (!DB.registros.find(x => x.id === reg.id)) DB.registros.push(reg);
+        });
+      }
+    } catch(e) {}
+  }
+
+  renderPonderacao();
 }
 
 function importarBasePonderacao(input, qid) {
