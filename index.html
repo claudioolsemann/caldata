@@ -14386,7 +14386,7 @@ function renderPonderacao() {
   const NP = ponderados.length;
   const totalAtual = N + NP;
   const dims = getDimsQ(q);
-  const pergs = (q.perguntas||[]).filter(p => p.cruzavel || p.tipo === 'escala5');
+  const pergs = (q.perguntas||[]).filter(p => p.tipo !== 'aberta' && p.tipo !== 'idade_aberta');
 
   // Distribuição por dimensão de cota
   function distDim(regs, dimK, itens) {
@@ -14615,6 +14615,7 @@ function renderPonderacao() {
         <button class="btn btn-p" onclick="aplicarPonderacao('${qid}')">⚖ Aplicar ponderação</button>
         <button class="btn" style="color:#2dc98e;border-color:#2dc98e;font-size:12px" onclick="relacionarTelefonesPonderados('${qid}')">📞 Relacionar telefones</button>
         <button class="btn" style="color:#f0b840;border-color:#f0b840;font-size:12px" onclick="pgEditarPonderados('${qid}')">✏ Editar registros ponderados</button>
+        <button class="btn" style="color:#2dc98e;border-color:#1D9E75;font-size:12px" onclick="_expFormatoOriginalPond('${qid}')">📋 Exportar base</button>
       </div>
       <div id="pond-base-info" style="font-size:11px;color:#8b95aa;margin-top:6px">
         💡 Importe uma base de telefones antes de aplicar · após ponderar, use "Relacionar telefones" e "Editar registros ponderados".
@@ -14662,7 +14663,7 @@ function _pondAtualizarEdicao(qid) {
   const N = base.length;
   const metaTotal = parseInt(document.getElementById('pond-total')?.value) || (reais.length + ponderados.length);
 
-  const pergs = (q.perguntas||[]).filter(p => p.cruzavel || p.tipo === 'escala5').sort((a,b)=>(a.num||0)-(b.num||0));
+  const pergs = (q.perguntas||[]).filter(p => p.tipo !== 'aberta' && p.tipo !== 'idade_aberta').sort((a,b)=>(a.num||0)-(b.num||0));
 
   const html = pergs.map(p => {
     const chave = p.var_cod ? String(p.var_cod) : String(p.id);
@@ -14738,97 +14739,59 @@ function _pondAplicarEdicao(qid) {
   const reais = DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem !== 'ponderacao');
   const metaTotal = parseInt(document.getElementById('pond-total')?.value) || 1000;
 
-  // Ativa Manual por pergunta primeiro para renderizar os inputs
+  // Coleta inputs de edição ANTES de trocar de visão (ainda estão no DOM)
+  const inputs = document.querySelectorAll('[id^="pedv-"]');
+  if (!inputs.length) { toast('Nenhum valor encontrado. Abra "Editar valores" primeiro.'); return; }
+
+  // Monta mapa: pergId → { optNorm → { pct, adicionar } }
+  const mapaValores = {};
+  inputs.forEach(inp => {
+    const pct = parseFloat(inp.value) || 0;
+    const semPrefix = inp.id.replace(/^pedv-/, '');
+    const dashIdx = semPrefix.indexOf('-');
+    if (dashIdx < 0) return;
+    const pergId = semPrefix.slice(0, dashIdx);
+    const optNorm = semPrefix.slice(dashIdx + 1);
+    const perg = (q.perguntas||[]).find(p => String(p.id) === String(pergId));
+    if (!perg) return;
+    const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
+    // Conta reais com essa opção usando _normKey para comparar
+    const reaisComOpt = reais.filter(r => {
+      const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
+      return v != null && _normKey(String(v)) === optNorm;
+    }).length;
+    const alvoTotal = Math.round(pct / 100 * metaTotal);
+    const adicionar = Math.max(0, alvoTotal - reaisComOpt);
+    if (!mapaValores[pergId]) mapaValores[pergId] = {};
+    mapaValores[pergId][optNorm] = adicionar;
+  });
+
+  // Guarda no estado global para calcularPonderacao usar
+  window._pondValoresEditados = mapaValores;
+
+  // Ativa Manual por pergunta (renderiza os inputs pond-perg-*)
   if (typeof setPondMetodo === 'function') setPondMetodo('pergunta');
 
+  // Aguarda render do DOM e preenche os inputs
   setTimeout(() => {
-    // Coleta todos os inputs de edição (pedv-{pergId}-{optNorm})
-    const inputs = document.querySelectorAll('[id^="pedv-"]');
-    if (!inputs.length) { toast('Nenhum valor editado encontrado'); return; }
-
     let preenchidos = 0;
-
-    inputs.forEach(inp => {
-      const pct = parseFloat(inp.value) || 0;
-      // id formato: pedv-{pergId}-{opt normalizado}
-      const semPrefix = inp.id.replace(/^pedv-/, '');
-      const dashIdx = semPrefix.indexOf('-');
-      if (dashIdx < 0) return;
-      const pergId = semPrefix.slice(0, dashIdx);
-      const optNorm = semPrefix.slice(dashIdx + 1); // opt com _ no lugar de \W
-
-      const perg = (q.perguntas||[]).find(p => String(p.id) === String(pergId));
-      if (!perg) return;
-
-      const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
-      const reaisComOpt = reais.filter(r => {
-        const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
-        if (v == null) return false;
-        return String(v).trim().replace(/[^A-Za-z0-9À-ú]/g,'_').replace(/_+/g,'_') === optNorm;
-      }).length;
-
-      const alvoTotal = Math.round(pct / 100 * metaTotal);
-      const adicionar = Math.max(0, alvoTotal - reaisComOpt);
-
-      // Busca o input correspondente no Manual por pergunta
-      // O manual usa: pond-perg-{p.id}-{opt.replace(/\W+/g,'_')}
-      // Percorre todos os inputs pond-perg-{pergId}-* e compara a parte do opt
-      const allManual = document.querySelectorAll('[id^="pond-perg-' + pergId + '-"]');
-      allManual.forEach(el => {
-        // Extrai optNorm do id do manual
-        const manualOptNorm = el.id.replace('pond-perg-' + pergId + '-', '');
-        if (manualOptNorm === optNorm || manualOptNorm.replace(/_/g,'') === optNorm.replace(/_/g,'')) {
-          el.value = adicionar;
-          preenchidos++;
-        }
+    Object.entries(mapaValores).forEach(([pergId, opts]) => {
+      Object.entries(opts).forEach(([optNorm, adicionar]) => {
+        const key = 'pond-perg-' + pergId + '-' + optNorm;
+        const el = document.getElementById(key);
+        if (el) { el.value = adicionar; preenchidos++; }
       });
     });
-
     if (typeof atualizarTotalManual === 'function') atualizarTotalManual();
-
     if (preenchidos > 0) {
-      toast(`✓ ${preenchidos} campos preenchidos — revise e clique em Aplicar ponderação`);
+      toast('✓ ' + preenchidos + ' campos preenchidos — revise e clique em Aplicar ponderação');
       setPondVisao('perguntas');
     } else {
-      // Fallback: preenche por posição (opt index)
-      inputs.forEach(inp => {
-        const pct = parseFloat(inp.value) || 0;
-        const semPrefix = inp.id.replace(/^pedv-/, '');
-        const dashIdx = semPrefix.indexOf('-');
-        if (dashIdx < 0) return;
-        const pergId = semPrefix.slice(0, dashIdx);
-        const perg = (q.perguntas||[]).find(p => String(p.id) === String(pergId));
-        if (!perg) return;
-        const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
-        const reaisComOpt = reais.filter(r => {
-          const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
-          if (v == null) return false;
-          // Tenta match mais flexível: normaliza ambos os lados
-          const vNorm = String(v).trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
-          const oNorm = semPrefix.slice(dashIdx+1).toUpperCase().replace(/[^A-Z0-9]/g,'');
-          return vNorm === oNorm || vNorm.startsWith(oNorm) || oNorm.startsWith(vNorm);
-        }).length;
-        const alvoTotal = Math.round(pct / 100 * metaTotal);
-        const adicionar = Math.max(0, alvoTotal - reaisComOpt);
-        // Busca por match flexível no manual
-        const allManual = document.querySelectorAll('[id^="pond-perg-' + pergId + '-"]');
-        const optKey = semPrefix.slice(dashIdx+1).toUpperCase().replace(/[^A-Z0-9]/g,'');
-        allManual.forEach(el => {
-          const elKey = el.id.replace('pond-perg-' + pergId + '-','').toUpperCase().replace(/[^A-Z0-9]/g,'');
-          if (elKey === optKey || elKey.startsWith(optKey) || optKey.startsWith(elKey)) {
-            el.value = adicionar;
-            preenchidos++;
-          }
-        });
-      });
-      if (typeof atualizarTotalManual === 'function') atualizarTotalManual();
-      toast(preenchidos > 0
-        ? `✓ ${preenchidos} campos preenchidos — revise e clique em Aplicar ponderação`
-        : '⚠ Não foi possível mapear os campos. Use o Manual por pergunta diretamente.');
-      if (preenchidos > 0) setPondVisao('perguntas');
+      toast('⚠ Manual por pergunta não encontrou os campos. Verifique se as perguntas têm dados.');
     }
-  }, 600);
+  }, 800);
 }
+
 
 function setPondMetodo(m) {
   window._pondMetodo = m;
@@ -14870,7 +14833,7 @@ function calcularPonderacao() {
   if (metodo === 'auto') {
     const dims = getDimsQ(q).filter(d => q.cotas?.[d.k]?.ativa);
     const ESCL = {1:'ÓTIMA',2:'BOA',3:'REGULAR',4:'RUIM',5:'PÉSSIMA',6:'NÃO SABE',7:'NÃO RESPONDEU'};
-    const pergs = (q.perguntas||[]).filter(p=>p.cruzavel||p.tipo==='escala5');
+    const pergs = (q.perguntas||[]).filter(p => p.tipo !== 'aberta' && p.tipo !== 'idade_aberta');
 
     const dimRows = dims.map(d => d.itens.map(it => {
       const cnt  = reais.filter(r => _matchCota(r[d.k], it)).length;
@@ -14954,7 +14917,7 @@ function calcularPonderacao() {
     atualizarTotalManual();
 
   } else { // pergunta
-    const pergs = (q.perguntas||[]).filter(p=>p.cruzavel||p.tipo==='escala5');
+    const pergs = (q.perguntas||[]).filter(p => p.tipo !== 'aberta' && p.tipo !== 'idade_aberta');
     if (!pergs.length) {
       prev.innerHTML = `<div class="al-info">Sem perguntas cruzáveis nesta pesquisa.</div>`;
       return;
@@ -15066,7 +15029,7 @@ function aplicarPonderacao(qid) {
       });
     });
   } else { // pergunta
-    const pergs = (q.perguntas||[]).filter(p=>p.cruzavel||p.tipo==='escala5');
+    const pergs = (q.perguntas||[]).filter(p => p.tipo !== 'aberta' && p.tipo !== 'idade_aberta');
     pergs.forEach(p => {
       const chave = p.var_cod ? String(p.var_cod) : String(p.id);
       // Coleta valores reais (funciona com externos e CATI)
@@ -16865,6 +16828,77 @@ async function relacionarTelefonesPonderados(qid) {
 //  Gera xlsx com mesma estrutura da planilha importada.
 //  ID de sequência: único por registro, não-óbvio (não sequencial).
 // ═══════════════════════════════════════════════════════════════
+function _expFormatoOriginalPond(qid) {
+  // Pergunta qual tipo exportar
+  const opcoes = ['1 — Reais + Ponderadas (total)', '2 — Só reais', '3 — Só ponderadas'];
+  const escolha = window.prompt(
+    'Exportar base no formato original (SEQUÊNCIA | TELEFONE | Col1…ColN)\n\nEscolha:\n1 — Reais + Ponderadas\n2 — Só reais\n3 — Só ponderadas\n\nDigite 1, 2 ou 3:',
+    '1'
+  );
+  if (!escolha) return;
+
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return toast('Pesquisa não encontrada');
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const _matchQidFn = r => r.pesquisa_id == qid || r.pesquisa_id == qidBanco;
+
+  const reais     = DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem !== 'ponderacao');
+  const ponderados= DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem === 'ponderacao');
+
+  let regs;
+  if (escolha.trim() === '2')      regs = reais;
+  else if (escolha.trim() === '3') regs = ponderados;
+  else                             regs = [...reais, ...ponderados];
+
+  if (!regs.length) { toast('Sem registros para exportar'); return; }
+
+  const perguntas = (q.perguntas || []).sort((a,b) => (a.num||0) - (b.num||0));
+
+  // Cabeçalho igual ao formato original
+  const header = ['SEQUÊNCIA', 'TELEFONE'];
+  perguntas.forEach(p => {
+    header.push(`Col${p.num} - ${(p.txt||'').slice(0,60)}`);
+  });
+
+  // Gera IDs de sequência não-óbvios
+  function gerarSeqId(idx, total) {
+    const base = 1000 + Math.floor(idx * (9000 / Math.max(total, 1)));
+    const salto = ((idx * 37 + 13) % 89) + 1;
+    return base + salto;
+  }
+
+  const rows = regs.map((reg, idx) => {
+    const seqId = gerarSeqId(idx, regs.length);
+    const tel = reg.telefone || '';
+    const row = [seqId, tel];
+    perguntas.forEach(p => {
+      const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+      const val = (reg.respostas||{})[chave] ?? (reg.respostas||{})[p.id] ?? '';
+      row.push(Array.isArray(val) ? val.join(' | ') : String(val));
+    });
+    return row;
+  });
+
+  const doExport = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+    ws['!cols'] = header.map((h, i) => ({ wch: i < 2 ? 14 : Math.min(40, h.length + 4) }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Base');
+    const tipo = escolha.trim() === '2' ? 'reais' : escolha.trim() === '3' ? 'ponderadas' : 'total';
+    const nome = `${(q.nome||'pesquisa').replace(/\s+/g,'_')}_${tipo}_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}`;
+    XLSX.writeFile(wb, `${nome}.xlsx`);
+    toast(`✓ ${regs.length} registros exportados (${tipo})`);
+  };
+
+  if (window.XLSX) { doExport(); }
+  else {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = doExport;
+    document.head.appendChild(s);
+  }
+}
+
 function expFormatoOriginal() {
   const qid = document.getElementById('exp-q')?.value;
   const tipo = document.getElementById('exp-tipo')?.value || 'validas';
