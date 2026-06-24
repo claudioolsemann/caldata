@@ -14682,7 +14682,7 @@ function _pondAtualizarEdicao(qid) {
       }).length;
       const pct = N ? Math.round(cnt/N*100) : 0;
       const alvo = Math.round(pct/100 * metaTotal);
-      const inputKey = 'pedv-' + p.id + '-' + opt.replace(/\W+/g,'_');
+      const inputKey = 'pedv-' + p.id + '-' + _normKey(opt);
       return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #252d40">
         <div style="font-size:12px;color:#c4cad8;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${opt}</div>
         <div style="flex:2;background:#2e3850;border-radius:3px;height:8px;min-width:60px">
@@ -14724,52 +14724,110 @@ function _pondEditarValor(input, pergId, opt, metaTotal) {
   if (el) el.textContent = alvo;
 }
 
+
+function _normKey(s) {
+  return String(s == null ? '' : s).trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
 function _pondAplicarEdicao(qid) {
   const q = DB.pesquisas.find(x => x.id == qid);
   if (!q) return;
   const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
   const _matchQidFn = r => r.pesquisa_id == qid || r.pesquisa_id == qidBanco;
   const reais = DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem !== 'ponderacao');
-  const N = reais.length;
   const metaTotal = parseInt(document.getElementById('pond-total')?.value) || 1000;
 
-  // Coleta todos os inputs de edição
-  const inputs = document.querySelectorAll('[id^="pedv-"]');
-  if (!inputs.length) return toast('Nenhum valor editado');
-
-  // Ativa Manual por pergunta e preenche campos
+  // Ativa Manual por pergunta primeiro para renderizar os inputs
   if (typeof setPondMetodo === 'function') setPondMetodo('pergunta');
 
   setTimeout(() => {
+    // Coleta todos os inputs de edição (pedv-{pergId}-{optNorm})
+    const inputs = document.querySelectorAll('[id^="pedv-"]');
+    if (!inputs.length) { toast('Nenhum valor editado encontrado'); return; }
+
     let preenchidos = 0;
+
     inputs.forEach(inp => {
       const pct = parseFloat(inp.value) || 0;
-      // Extrai pergId e opt do id: pedv-{pergId}-{opt_normalizado}
-      const parts = inp.id.replace('pedv-','').split('-');
-      const pergId = parts[0];
-      const optNorm = parts.slice(1).join('-');
-      // Encontra o campo correspondente no Manual por pergunta
-      const q2 = DB.pesquisas.find(x => x.id == qid);
-      const perg = (q2?.perguntas||[]).find(p => String(p.id) === String(pergId));
+      // id formato: pedv-{pergId}-{opt normalizado}
+      const semPrefix = inp.id.replace(/^pedv-/, '');
+      const dashIdx = semPrefix.indexOf('-');
+      if (dashIdx < 0) return;
+      const pergId = semPrefix.slice(0, dashIdx);
+      const optNorm = semPrefix.slice(dashIdx + 1); // opt com _ no lugar de \W
+
+      const perg = (q.perguntas||[]).find(p => String(p.id) === String(pergId));
       if (!perg) return;
+
       const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
       const reaisComOpt = reais.filter(r => {
         const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
-        return v != null && String(v).trim().replace(/\W+/g,'_').toLowerCase() === optNorm.toLowerCase();
+        if (v == null) return false;
+        return String(v).trim().replace(/[^A-Za-z0-9À-ú]/g,'_').replace(/_+/g,'_') === optNorm;
       }).length;
-      const alvoTotal = Math.round(pct/100 * metaTotal);
+
+      const alvoTotal = Math.round(pct / 100 * metaTotal);
       const adicionar = Math.max(0, alvoTotal - reaisComOpt);
-      // Busca input do manual por pergunta
-      const allInputs = document.querySelectorAll('[id^="pond-perg-' + perg.id + '-"]');
-      allInputs.forEach(el => {
-        el.value = adicionar;
-        preenchidos++;
+
+      // Busca o input correspondente no Manual por pergunta
+      // O manual usa: pond-perg-{p.id}-{opt.replace(/\W+/g,'_')}
+      // Percorre todos os inputs pond-perg-{pergId}-* e compara a parte do opt
+      const allManual = document.querySelectorAll('[id^="pond-perg-' + pergId + '-"]');
+      allManual.forEach(el => {
+        // Extrai optNorm do id do manual
+        const manualOptNorm = el.id.replace('pond-perg-' + pergId + '-', '');
+        if (manualOptNorm === optNorm || manualOptNorm.replace(/_/g,'') === optNorm.replace(/_/g,'')) {
+          el.value = adicionar;
+          preenchidos++;
+        }
       });
     });
+
     if (typeof atualizarTotalManual === 'function') atualizarTotalManual();
-    toast(`✓ ${preenchidos} campos preenchidos — revise e clique em Aplicar ponderação`);
-    setPondVisao('perguntas');
-  }, 400);
+
+    if (preenchidos > 0) {
+      toast(`✓ ${preenchidos} campos preenchidos — revise e clique em Aplicar ponderação`);
+      setPondVisao('perguntas');
+    } else {
+      // Fallback: preenche por posição (opt index)
+      inputs.forEach(inp => {
+        const pct = parseFloat(inp.value) || 0;
+        const semPrefix = inp.id.replace(/^pedv-/, '');
+        const dashIdx = semPrefix.indexOf('-');
+        if (dashIdx < 0) return;
+        const pergId = semPrefix.slice(0, dashIdx);
+        const perg = (q.perguntas||[]).find(p => String(p.id) === String(pergId));
+        if (!perg) return;
+        const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
+        const reaisComOpt = reais.filter(r => {
+          const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
+          if (v == null) return false;
+          // Tenta match mais flexível: normaliza ambos os lados
+          const vNorm = String(v).trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+          const oNorm = semPrefix.slice(dashIdx+1).toUpperCase().replace(/[^A-Z0-9]/g,'');
+          return vNorm === oNorm || vNorm.startsWith(oNorm) || oNorm.startsWith(vNorm);
+        }).length;
+        const alvoTotal = Math.round(pct / 100 * metaTotal);
+        const adicionar = Math.max(0, alvoTotal - reaisComOpt);
+        // Busca por match flexível no manual
+        const allManual = document.querySelectorAll('[id^="pond-perg-' + pergId + '-"]');
+        const optKey = semPrefix.slice(dashIdx+1).toUpperCase().replace(/[^A-Z0-9]/g,'');
+        allManual.forEach(el => {
+          const elKey = el.id.replace('pond-perg-' + pergId + '-','').toUpperCase().replace(/[^A-Z0-9]/g,'');
+          if (elKey === optKey || elKey.startsWith(optKey) || optKey.startsWith(elKey)) {
+            el.value = adicionar;
+            preenchidos++;
+          }
+        });
+      });
+      if (typeof atualizarTotalManual === 'function') atualizarTotalManual();
+      toast(preenchidos > 0
+        ? `✓ ${preenchidos} campos preenchidos — revise e clique em Aplicar ponderação`
+        : '⚠ Não foi possível mapear os campos. Use o Manual por pergunta diretamente.');
+      if (preenchidos > 0) setPondVisao('perguntas');
+    }
+  }, 600);
 }
 
 function setPondMetodo(m) {
@@ -14872,7 +14930,7 @@ function calcularPonderacao() {
         ${d.itens.map(it => {
           const cnt = reais.filter(r => _matchCota(r[d.k], it)).length;
           const sug = Math.max(0, Math.round(cnt*fator)-cnt);
-          const key = `pond-man-${d.k}-${it.replace(/\W+/g,'_')}`;
+          const key = `pond-man-${d.k}-${_normKey(it)}`;
           return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2e3850">
             <div style="flex:1;font-size:12px;color:#c4cad8">${it}<span style="color:#636d88;margin-left:6px">(${cnt} reais · ${reais.length?Math.round((cnt/reais.length)*100):0}%)</span></div>
             <label style="margin:0;font-size:11px;color:#8b95aa;white-space:nowrap">Adicionar:</label>
@@ -14901,22 +14959,30 @@ function calcularPonderacao() {
       prev.innerHTML = `<div class="al-info">Sem perguntas cruzáveis nesta pesquisa.</div>`;
       return;
     }
-    const ESCL = {1:'ÓTIMA',2:'BOA',3:'REGULAR',4:'RUIM',5:'PÉSSIMA',6:'NÃO SABE',7:'NÃO RESPONDEU'};
     const rows = pergs.map(p => {
-      const opts = p.tipo==='escala5'?['1','2','3','4','5','6','7']:(p.opts||[]);
-      const usados = opts.filter(opt => reais.some(r=>_respMatch((r.respostas||{})[p.id],opt)));
+      // Usa chave correta: var_cod se existir, senão id (para registros externos)
+      const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+      // Coleta valores reais dos registros (funciona com externos e CATI)
+      const valSet = new Set();
+      reais.forEach(r => {
+        const v = (r.respostas||{})[chave] ?? (r.respostas||{})[p.id];
+        if (v != null && String(v).trim()) valSet.add(String(v).trim());
+      });
+      const usados = [...valSet];
       if (!usados.length) return '';
       return `<div style="margin-bottom:12px">
         <div style="font-size:11px;font-weight:700;color:#f0b840;letter-spacing:.06em;margin-bottom:6px">
-          ${p.var_cod} — ${(p.txt||'').slice(0,55)}${(p.txt||'').length>55?'...':''}
+          ${p.var_cod || ('Col'+(p.num||'?'))} — ${(p.txt||'').slice(0,55)}${(p.txt||'').length>55?'...':''}
         </div>
         ${usados.map(opt => {
-          const cnt = reais.filter(r=>_respMatch((r.respostas||{})[p.id],opt)).length;
+          const cnt = reais.filter(r => {
+            const v = (r.respostas||{})[chave] ?? (r.respostas||{})[p.id];
+            return v != null && String(v).trim().toUpperCase() === opt.toUpperCase();
+          }).length;
           const sug = Math.max(0, Math.round(cnt*fator)-cnt);
-          const lbl = ESCL[parseInt(opt)] ? `${opt} — ${ESCL[parseInt(opt)]}` : opt;
-          const key = `pond-perg-${p.id}-${String(opt).replace(/\W+/g,'_')}`;
+          const key = `pond-perg-${p.id}-${_normKey(opt)}`;
           return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2e3850">
-            <div style="flex:1;font-size:12px;color:#c4cad8">${lbl}<span style="color:#636d88;margin-left:6px">(${cnt} reais · ${reais.length?Math.round((cnt/reais.length)*100):0}%)</span></div>
+            <div style="flex:1;font-size:12px;color:#c4cad8">${opt}<span style="color:#636d88;margin-left:6px">(${cnt} reais · ${reais.length?Math.round((cnt/reais.length)*100):0}%)</span></div>
             <label style="margin:0;font-size:11px;color:#8b95aa;white-space:nowrap">Adicionar:</label>
             <input type="number" min="0" value="${sug}" id="${key}"
               style="width:75px;padding:5px 8px;border:1.5px solid #3a4560;border-radius:8px;background:#1e2433;color:#f0f2f8;font-size:13px;font-weight:700;font-family:inherit"
@@ -14985,7 +15051,7 @@ function aplicarPonderacao(qid) {
     const dims = getDimsQ(q).filter(d => q.cotas?.[d.k]?.ativa);
     dims.forEach(d => {
       d.itens.forEach(it => {
-        const key = `pond-man-${d.k}-${it.replace(/\W+/g,'_')}`;
+        const key = `pond-man-${d.k}-${_normKey(it)}`;
         const qtd = parseInt(document.getElementById(key)?.value)||0;
         if (!qtd) return;
         const pool = reais.filter(r=>_matchCota(r[d.k], it));
@@ -15002,12 +15068,21 @@ function aplicarPonderacao(qid) {
   } else { // pergunta
     const pergs = (q.perguntas||[]).filter(p=>p.cruzavel||p.tipo==='escala5');
     pergs.forEach(p => {
-      const opts = p.tipo==='escala5'?['1','2','3','4','5','6','7']:(p.opts||[]);
-      opts.forEach(opt => {
-        const key = `pond-perg-${p.id}-${String(opt).replace(/\W+/g,'_')}`;
+      const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+      // Coleta valores reais (funciona com externos e CATI)
+      const valSet = new Set();
+      reais.forEach(r => {
+        const v = (r.respostas||{})[chave] ?? (r.respostas||{})[p.id];
+        if (v != null && String(v).trim()) valSet.add(String(v).trim());
+      });
+      [...valSet].forEach(opt => {
+        const key = `pond-perg-${p.id}-${_normKey(opt)}`;
         const qtd = parseInt(document.getElementById(key)?.value)||0;
         if (!qtd) return;
-        const pool = reais.filter(r=>_respMatch((r.respostas||{})[p.id],opt));
+        const pool = reais.filter(r => {
+          const v = (r.respostas||{})[chave] ?? (r.respostas||{})[p.id];
+          return v != null && String(v).trim().toUpperCase() === opt.toUpperCase();
+        });
         if (!pool.length) return;
         for (let i=0; i<qtd; i++) {
           const r = pool[i%pool.length];
