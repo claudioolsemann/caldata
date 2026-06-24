@@ -14495,6 +14495,30 @@ function renderPonderacao() {
       ` : '<div style="font-size:12px;color:#8b95aa">Sem entrevistas registradas ainda.</div>'}
     </div>
 
+    <!-- IMPORTAR RESULTADO PONDERADO -->
+    <div class="card" style="border:1.5px solid #a855f7">
+      <div class="card-title" style="color:#c084fc">📊 Importar resultado ponderado</div>
+      <div style="font-size:12px;color:#8b95aa;margin-bottom:12px;line-height:1.5">
+        Importe uma planilha com os <strong style="color:#c4cad8">percentuais desejados</strong> por pergunta e opção de resposta.
+        O sistema calcula automaticamente quantos registros criar para atingir a meta com esses percentuais.
+        Formato: <strong style="color:#c084fc">N - PERGUNTA / opção: %</strong> (decimal, ex: 0.48 = 48%)
+      </div>
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+        <label class="btn" style="cursor:pointer;margin:0;border-color:#a855f7;color:#c084fc;font-size:13px;font-weight:700">
+          📊 Selecionar planilha (.xlsx / .xls)
+          <input type="file" accept=".xlsx,.xls" style="display:none" onchange="importarResultadoPonderado(this,'${qid}')">
+        </label>
+        <div id="pond-res-status" style="font-size:12px;color:#8b95aa;padding:6px 0">Nenhum resultado importado ainda.</div>
+      </div>
+      <div id="pond-res-preview" style="margin-top:10px"></div>
+      <div style="margin-top:10px;padding:8px 10px;background:#1a2030;border-radius:8px;border-left:3px solid #a855f7">
+        <div style="font-size:10px;font-weight:700;color:#555e78;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Formato esperado</div>
+        <div style="font-family:monospace;font-size:11px;color:#c084fc">N - NOME DA PERGUNTA</div>
+        <div style="font-family:monospace;font-size:11px;color:#c084fc">   OPÇÃO DE RESPOSTA   0.48</div>
+        <div style="font-size:10px;color:#555e78;margin-top:3px">Percentuais como decimal (0.48 = 48%) · Meta total definida no campo abaixo</div>
+      </div>
+    </div>
+
     <!-- IMPORTAR PLANILHA DE PONDERAÇÃO -->
     <div class="card" style="border:1.5px solid #3a5da8">
       <div class="card-title" style="color:#7eb6ff">📥 Importar planilha de cotas previstas</div>
@@ -14565,9 +14589,11 @@ function renderPonderacao() {
           <input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="importarBasePonderacao(this,'${qid}')">
         </label>
         <button class="btn btn-p" onclick="aplicarPonderacao('${qid}')">⚖ Aplicar ponderação</button>
+        <button class="btn" style="color:#2dc98e;border-color:#2dc98e;font-size:12px" onclick="relacionarTelefonesPonderados('${qid}')">📞 Relacionar telefones</button>
+        <button class="btn" style="color:#f0b840;border-color:#f0b840;font-size:12px" onclick="pgEditarPonderados('${qid}')">✏ Editar registros ponderados</button>
       </div>
       <div id="pond-base-info" style="font-size:11px;color:#8b95aa;margin-top:6px">
-        💡 Importe uma base de telefones extras antes de aplicar para que sejam marcados como "ponderação" na exportação.
+        💡 Importe uma base de telefones antes de aplicar · após ponderar, use "Relacionar telefones" e "Editar registros ponderados".
       </div>
     </div>
 
@@ -14931,6 +14957,284 @@ function excluirPonderacao(qid, idx) {
 //      INSTRUÇÃO (agrupada/Col5) → escolaridade | REGIÃO/REGIAO → regiao
 //  • Perguntas — ColN → pergunta de num=N da pesquisa selecionada
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//  IMPORTAR RESULTADO PONDERADO
+//  Lê planilha com percentuais desejados por pergunta/opção.
+//  Formato:
+//    N - NOME DA PERGUNTA   (linha de título, col B = #VALUE! ou vazia)
+//       OPÇÃO               0.48   (decimal = %)
+//  Mapeamento: compara texto da opção com as opções cadastradas
+//  na pesquisa selecionada — funciona para qualquer questionário.
+//  Perfis demográficos detectados por palavras-chave no título.
+//  Após importar: preenche o campo "Total desejado" e configura
+//  o método Manual por pergunta com os valores calculados.
+// ═══════════════════════════════════════════════════════════════
+function importarResultadoPonderado(input, qid) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return toast('Pesquisa não encontrada');
+  const perguntas = q.perguntas || [];
+
+  const statusEl  = document.getElementById('pond-res-status');
+  const previewEl = document.getElementById('pond-res-preview');
+  if (statusEl) statusEl.textContent = '⏳ Lendo arquivo...';
+  if (previewEl) previewEl.innerHTML = '';
+
+  const doRead = () => {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+
+        // ── Normalizar texto para comparação ──
+        function norm(s) {
+          return String(s == null ? '' : s).trim()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+
+        // ── Parsear blocos: título + opções ──
+        const blocos = []; // { titulo, opcoes: [{txt, pct}] }
+        let atual = null;
+
+        for (const row of rows) {
+          const col0 = row[0] == null ? '' : String(row[0]);
+          const col1 = row[1];
+
+          // Linha de título: col1 é #VALUE!, string com VALUE, ou null/vazia
+          // e col0 tem conteúdo sem indentação
+          const ehTitulo = col0.trim() !== '' &&
+            !col0.startsWith('\xa0') && !col0.startsWith(' ') &&
+            (col1 == null || String(col1).includes('VALUE') || col1 === '');
+
+          if (ehTitulo && col0.trim().length > 3) {
+            if (atual) blocos.push(atual);
+            atual = { titulo: col0.trim(), opcoes: [] };
+            continue;
+          }
+
+          // Linha de opção: tem indentação (nbsp ou espaço) e valor numérico
+          if (atual && col0.startsWith('\xa0') || (atual && col0.startsWith(' '))) {
+            const txt = col0.replace(/^\s+|\xa0/g, '').trim();
+            const pct = typeof col1 === 'number' ? col1 :
+                        parseFloat(String(col1 == null ? '' : col1).replace(',', '.'));
+            if (txt && !isNaN(pct) && pct >= 0 && pct <= 1) {
+              atual.opcoes.push({ txt, pct });
+            }
+          }
+        }
+        if (atual) blocos.push(atual);
+
+        if (!blocos.length) {
+          if (statusEl) statusEl.textContent = '⚠ Nenhum bloco de pergunta detectado.';
+          return;
+        }
+
+        // ── Detectar total de entrevistas ──
+        let metaTotal = 1000;
+        for (const row of rows) {
+          const s = String(row[0] == null ? '' : row[0]);
+          const m = s.match(/(\d[\d.,]+)\s*ENTREVISTAS/i);
+          if (m) { metaTotal = parseInt(m[1].replace(/[.,]/g, '')); break; }
+        }
+
+        // ── Detectar tipo de bloco: demográfico ou pergunta ──
+        function ehDemo(titulo) {
+          const n = norm(titulo);
+          return /\bSEXO\b/.test(n) || /\bIDADE\b/.test(n) ||
+                 /\bESCOLARIDADE\b/.test(n) || /\bINSTRUCAO\b/.test(n) ||
+                 /\bREGIAO\b/.test(n) || /\bREGIOES\b/.test(n) ||
+                 /\bPERFIL\b/.test(n);
+        }
+
+        // ── Mapear blocos → perguntas cadastradas ──
+        // Estratégia: para cada bloco não-demográfico, compara opções
+        // com as opções de cada pergunta cadastrada (score de match)
+        function scoreMatch(blocoOpts, pergOpts) {
+          if (!pergOpts || !pergOpts.length) return 0;
+          let hits = 0;
+          blocoOpts.forEach(bo => {
+            const bn = norm(bo.txt);
+            if (pergOpts.some(po => {
+              const pn = norm(po);
+              return pn === bn || pn.includes(bn) || bn.includes(pn);
+            })) hits++;
+          });
+          return hits / Math.max(blocoOpts.length, pergOpts.length);
+        }
+
+        const mapeados = []; // { bloco, perg|null, tipo:'demo'|'perg', demoCampo }
+
+        for (const bloco of blocos) {
+          if (ehDemo(bloco.titulo)) {
+            const n = norm(bloco.titulo);
+            let demoCampo = '';
+            if (/\bSEXO\b/.test(n)) demoCampo = 'sexo';
+            else if (/\bIDADE\b/.test(n)) demoCampo = 'faixa_etaria';
+            else if (/\bESCOLARIDADE\b|INSTRUCAO/.test(n)) demoCampo = 'escolaridade';
+            else if (/\bREGIAO\b|REGIOES/.test(n)) demoCampo = 'regiao';
+            mapeados.push({ bloco, perg: null, tipo: 'demo', demoCampo });
+            continue;
+          }
+
+          // Tenta mapear para pergunta cadastrada
+          let melhorPerg = null, melhorScore = 0;
+          for (const p of perguntas) {
+            const opts = p.opts || [];
+            const s = scoreMatch(bloco.opcoes, opts);
+            if (s > melhorScore) { melhorScore = s; melhorPerg = p; }
+          }
+          // Aceita se score >= 0.3 (pelo menos 30% das opções batem)
+          mapeados.push({ bloco, perg: melhorScore >= 0.3 ? melhorPerg : null, tipo: 'perg', score: melhorScore });
+        }
+
+        // ── Calcular alvo de registros por opção ──
+        // Para cada bloco mapeado: alvo = round(pct * metaTotal)
+        const plano = []; // { bloco, perg|demoCampo, opcoes: [{txt, pct, alvo}] }
+        const reais = DB.registros.filter(r => {
+          const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+          return (r.pesquisa_id == qid || r.pesquisa_id == qidBanco) &&
+                 r.status === 1 && r.origem !== 'ponderacao';
+        });
+        const N = reais.length;
+
+        for (const m of mapeados) {
+          const opcoes = m.bloco.opcoes.map(o => ({
+            txt: o.txt,
+            pct: o.pct,
+            alvo: Math.round(o.pct * metaTotal),
+          }));
+          plano.push({ ...m, opcoes });
+        }
+
+        // ── Montar prévia ──
+        const totalMapeadas = mapeados.filter(m => m.perg || m.demoCampo).length;
+        const naoMapeadas   = mapeados.filter(m => !m.perg && !m.demoCampo).length;
+
+        function corPct(pct) {
+          return pct > 0 ? '#2dc98e' : '#636d88';
+        }
+
+        const blocoHtml = plano.map(m => {
+          const label = m.perg
+            ? `<span style="color:#c084fc">Col${m.perg.num}</span> — ${(m.perg.txt||'').slice(0,60)}`
+            : m.demoCampo
+              ? `<span style="color:#60a8e8">${m.demoCampo.toUpperCase()}</span>`
+              : `<span style="color:#f07070">⚠ não mapeada</span>`;
+          const opts = m.opcoes.map(o =>
+            `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+              <div style="font-size:11px;color:#c4cad8;min-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${o.txt}</div>
+              <div style="flex:1;background:#2e3850;border-radius:3px;height:6px">
+                <div style="height:100%;background:${corPct(o.pct)};border-radius:3px;width:${Math.round(o.pct*100)}%"></div>
+              </div>
+              <div style="font-size:11px;color:#8b95aa;min-width:90px;text-align:right">${Math.round(o.pct*100)}% → <strong style="color:#f0b840">${o.alvo}</strong></div>
+            </div>`
+          ).join('');
+          return `<div style="margin-bottom:12px;padding:10px;background:#1e2433;border-radius:8px">
+            <div style="font-size:11px;font-weight:700;margin-bottom:6px">${label}</div>
+            ${opts}
+          </div>`;
+        }).join('');
+
+        if (previewEl) previewEl.innerHTML = `
+          <div style="background:rgba(168,85,247,.08);border-radius:10px;padding:14px;border:1px solid rgba(168,85,247,.25);margin-top:8px">
+            <div style="font-size:14px;font-weight:800;color:#c084fc;margin-bottom:4px">📊 Resultado ponderado — meta: ${metaTotal} entrevistas</div>
+            <div style="font-size:12px;color:#8b95aa;margin-bottom:12px">
+              ${totalMapeadas} blocos mapeados · ${naoMapeadas} não mapeados · base real: ${N} registros
+            </div>
+            <div style="max-height:450px;overflow-y:auto">${blocoHtml}</div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button onclick="_resPoderConfirmar()" class="btn btn-p" style="font-size:13px;background:rgba(168,85,247,.2);border-color:#a855f7;color:#c084fc">
+                ✅ Aplicar este resultado como meta de ponderação
+              </button>
+              <button onclick="document.getElementById('pond-res-preview').innerHTML='';document.getElementById('pond-res-status').textContent='Cancelado.'" class="btn" style="font-size:13px">Cancelar</button>
+            </div>
+          </div>`;
+
+        if (statusEl) statusEl.textContent = `${blocos.length} blocos detectados — ${totalMapeadas} mapeados para perguntas cadastradas.`;
+
+        // Salva plano para confirmar
+        window._resPonderPlano = { plano, metaTotal, qid, q };
+
+      } catch(err) {
+        console.error('[importarResultadoPonderado]', err);
+        if (statusEl) statusEl.textContent = '⚠ Erro: ' + (err.message || err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  if (window.XLSX) { doRead(); }
+  else {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = doRead;
+    s.onerror = () => { if (statusEl) statusEl.textContent = '⚠ Não foi possível carregar biblioteca xlsx.'; };
+    document.head.appendChild(s);
+  }
+}
+
+function _resPoderConfirmar() {
+  const p = window._resPonderPlano;
+  if (!p) return;
+  const { plano, metaTotal, qid } = p;
+
+  // Preenche o campo total desejado
+  const totalEl = document.getElementById('pond-total');
+  if (totalEl) { totalEl.value = metaTotal; }
+
+  // Ativa modo Manual por pergunta
+  if (typeof setPondMetodo === 'function') setPondMetodo('pergunta');
+
+  // Aguarda render e preenche os campos de quantidade
+  setTimeout(() => {
+    const reais = DB.registros.filter(r => {
+      const q = DB.pesquisas.find(x => x.id == qid);
+      const qidBanco = q?.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+      return (r.pesquisa_id == qid || r.pesquisa_id == qidBanco) &&
+             r.status === 1 && r.origem !== 'ponderacao';
+    });
+    const N = reais.length;
+
+    let preenchidos = 0;
+    for (const m of plano) {
+      if (!m.perg) continue;
+      const p = m.perg;
+      for (const o of m.opcoes) {
+        const alvoTotal = o.alvo;
+        // Conta quantos reais já têm essa resposta
+        const jaExiste = reais.filter(r => {
+          const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+          const resp = (r.respostas || {})[chave] || (r.respostas || {})[p.id];
+          return resp != null && String(resp).trim().toUpperCase() === o.txt.toUpperCase();
+        }).length;
+        const adicionar = Math.max(0, alvoTotal - jaExiste);
+        // Normaliza texto da opção para chave de input
+        const optKey = o.txt.replace(/\W+/g, '_');
+        const inputId = `pond-perg-${p.id}-${optKey}`;
+        const el = document.getElementById(inputId);
+        if (el) { el.value = adicionar; preenchidos++; }
+      }
+    }
+
+    if (typeof atualizarTotalManual === 'function') atualizarTotalManual();
+    toast(`✓ Meta aplicada: ${metaTotal} entrevistas · ${preenchidos} campos preenchidos`);
+
+    // Limpa preview
+    const previewEl = document.getElementById('pond-res-preview');
+    const statusEl  = document.getElementById('pond-res-status');
+    if (previewEl) previewEl.innerHTML = '';
+    if (statusEl)  statusEl.innerHTML = `✅ Meta de <strong style="color:#c084fc">${metaTotal}</strong> entrevistas aplicada — revise e clique em Aplicar ponderação.`;
+
+    window._resPonderPlano = null;
+  }, 600);
+}
+
 function importarQuestionarioExterno(input, qid) {
   const file = input.files[0];
   if (!file) return;
@@ -16040,6 +16344,7 @@ function pgExportar() {
         <button class="btn btn-sm" style="color:#b37d00;border-color:#ffd700" onclick="expPausasCSV()">Baixar Pausas CSV</button>
         <button class="btn btn-sm" style="color:#60a8e8;border-color:#60a8e8" onclick="expBasesTelCSV()">Baixar Bases de Telefones</button>
         <button class="btn btn-sm" style="color:#EF9F27;border-color:#EF9F27" onclick="simularTelefonesEntrevistas()" title="Gera telefone celular aleatório para entrevistas que não têm telefone registrado">📱 Simular telefones</button>
+        <button class="btn btn-sm" style="color:#2dc98e;border-color:#2dc98e" onclick="expFormatoOriginal()">📋 Exportar formato original (Col1…ColN)</button>
       </div>
       <div style="font-size:11px;color:#8b95aa;margin-top:8px">
         💡 O CSV inclui colunas <code style="background:#2e3850;padding:1px 5px;border-radius:4px">tipo_registro</code> (<strong style="color:#2dc98e">entrevista</strong> ou <strong style="color:#f0b840">ponderacao</strong>) e <code style="background:#2e3850;padding:1px 5px;border-radius:4px">telefone</code>.
@@ -16231,6 +16536,322 @@ function getExpRegs() {
   if (tipo==='somente_reais') r = r.filter(x=>x.status===1 && !x.origem);
   if (tipo==='somente_pond')  r = r.filter(x=>x.status===1 && x.origem==='ponderacao');
   return r;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ITEM 2 — RELACIONAR TELEFONES NOS REGISTROS PONDERADOS
+//  Pega os registros ponderados sem telefone e distribui os
+//  telefones da base de ponderação em sequência não-óbvia.
+//  Sequência não-óbvia: embaralha com seed + pula índices primos.
+// ═══════════════════════════════════════════════════════════════
+async function relacionarTelefonesPonderados(qid) {
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return toast('Pesquisa não encontrada');
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+
+  // Registros ponderados sem telefone
+  const ponderados = DB.registros.filter(r =>
+    (r.pesquisa_id == qid || r.pesquisa_id == qidBanco) &&
+    r.status === 1 && r.origem === 'ponderacao' && !r.telefone
+  );
+  if (!ponderados.length) return toast('Nenhum registro ponderado sem telefone');
+
+  // Base de ponderação importada para esta pesquisa
+  const base = DB.bases.find(b =>
+    (b.pesquisa_id == qid || b.pesquisa_id == qidBanco) &&
+    b.tipo_base === 'ponderacao'
+  );
+  const tels = (base?.telefones || window._basePonderacaoImportada || [])
+    .filter(t => !t.usado);
+
+  if (!tels.length) return toast('Nenhum telefone disponível na base de ponderação. Importe uma base primeiro.');
+  if (tels.length < ponderados.length) {
+    toast(`⚠ Base tem ${tels.length} telefones para ${ponderados.length} registros — alguns ficarão sem telefone`);
+  }
+
+  // Sequência não-óbvia: embaralha com Fisher-Yates + seed baseado no timestamp
+  function embaralhar(arr) {
+    const a = [...arr];
+    let seed = Date.now() % 99991;
+    function rng() { seed = (seed * 16807 + 0) % 2147483647; return seed / 2147483647; }
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+  const telsEmbaralhados = embaralhar(tels);
+
+  let atribuidos = 0;
+  for (let i = 0; i < ponderados.length && i < telsEmbaralhados.length; i++) {
+    const reg = ponderados[i];
+    const tel = telsEmbaralhados[i];
+    reg.telefone = tel.tel;
+    reg.telefone_fonte = 'ponderacao';
+    tel.usado = true;
+    tel.usadoPorReg = reg.id;
+    atribuidos++;
+  }
+
+  salvarTudo();
+
+  // Atualiza no banco
+  if (window.registrosSb) {
+    let ok = 0;
+    for (let i = 0; i < ponderados.length && i < telsEmbaralhados.length; i++) {
+      const reg = ponderados[i];
+      try {
+        await window.supabaseClient.from('registros').update({ telefone: reg.telefone }).eq('id', reg.id);
+        ok++;
+      } catch(e) {}
+    }
+    toast(`✓ ${atribuidos} telefones relacionados (${ok} sincronizados no banco)`);
+  } else {
+    toast(`✓ ${atribuidos} telefones relacionados`);
+  }
+
+  renderPonderacao();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ITEM 3 — EXPORTAR NO FORMATO ORIGINAL (SEQUÊNCIA | TELEFONE | Col1…ColN)
+//  Gera xlsx com mesma estrutura da planilha importada.
+//  ID de sequência: único por registro, não-óbvio (não sequencial).
+// ═══════════════════════════════════════════════════════════════
+function expFormatoOriginal() {
+  const qid = document.getElementById('exp-q')?.value;
+  const tipo = document.getElementById('exp-tipo')?.value || 'validas';
+
+  let regs = getExpRegs();
+  if (!regs.length) { toast('Sem dados para exportar'); return; }
+
+  // Filtra pela pesquisa selecionada
+  if (qid) {
+    const q = DB.pesquisas.find(x => x.id == qid);
+    const qidBanco = q?.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+    regs = regs.filter(r => r.pesquisa_id == qid || r.pesquisa_id == qidBanco);
+  }
+  if (!regs.length) { toast('Sem dados para a pesquisa selecionada'); return; }
+
+  // Busca pesquisa e perguntas
+  const q = qid ? DB.pesquisas.find(x => x.id == qid) : DB.pesquisas.find(x => {
+    const qb = x.banco_id ? parseInt(x.banco_id) : x.id;
+    return regs.some(r => r.pesquisa_id == x.id || r.pesquisa_id == qb);
+  });
+  const perguntas = (q?.perguntas || []).sort((a, b) => (a.num||0) - (b.num||0));
+
+  // Gera IDs de sequência não-óbvios
+  // Base: múltiplos de 7 com salto variável baseado no índice
+  function gerarSeqId(idx, total) {
+    const base = 1000 + Math.floor(idx * (9000 / Math.max(total, 1)));
+    const salto = ((idx * 37 + 13) % 89) + 1;
+    return base + salto;
+  }
+
+  // Cabeçalho: SEQUÊNCIA | TELEFONE | Col1 - TEXTO | Col2 - TEXTO | ...
+  const header = ['SEQUÊNCIA', 'TELEFONE'];
+  perguntas.forEach(p => {
+    header.push(`Col${p.num} - ${(p.txt||'').slice(0, 60)}`);
+  });
+
+  // Linhas
+  const rows = regs.map((reg, idx) => {
+    const seqId = gerarSeqId(idx, regs.length);
+    const tel = reg.telefone || '';
+    const row = [seqId, tel];
+    perguntas.forEach(p => {
+      const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+      const val = (reg.respostas || {})[chave] ?? (reg.respostas || {})[p.id] ?? '';
+      row.push(Array.isArray(val) ? val.join(' | ') : String(val));
+    });
+    return row;
+  });
+
+  // Gera xlsx
+  const doExport = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+    // Largura automática
+    ws['!cols'] = header.map((h, i) => ({ wch: i < 2 ? 14 : Math.min(40, h.length + 4) }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Base');
+    const nome = q ? `${(q.nome||'pesquisa').replace(/\s+/g,'_')}_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}` : 'exportacao';
+    XLSX.writeFile(wb, `${nome}.xlsx`);
+    toast(`✓ ${regs.length} registros exportados`);
+  };
+
+  if (window.XLSX) { doExport(); }
+  else {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = doExport;
+    document.head.appendChild(s);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ITEM 4 — EDIÇÃO MANUAL DE REGISTROS PONDERADOS
+//  Abre modal com questionário completo para editar respostas
+//  de um registro ponderado sem precisar do telefone.
+// ═══════════════════════════════════════════════════════════════
+function pgEditarPonderados(qid) {
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return;
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const pond = DB.registros.filter(r =>
+    (r.pesquisa_id == qid || r.pesquisa_id == qidBanco) &&
+    r.status === 1 && r.origem === 'ponderacao'
+  );
+
+  const m = document.getElementById('adm-main');
+  if (!pond.length) {
+    m.innerHTML = `<div class="card"><div class="al-info">Nenhum registro ponderado nesta pesquisa.</div>
+      <button class="btn" onclick="nav('ponderacao')">← Voltar à Ponderação</button></div>`;
+    return;
+  }
+
+  const pergs = (q.perguntas || []).sort((a,b) => (a.num||0)-(b.num||0));
+
+  const linhas = pond.map((reg, idx) => {
+    const tel = reg.telefone ? `<span style="font-family:monospace;color:#8b95aa">${reg.telefone}</span>` : '<span style="color:#636d88">sem telefone</span>';
+    const perfil = [reg.sexo, reg.faixa_etaria, reg.regiao].filter(Boolean).join(' · ');
+    return `<tr style="border-top:1px solid #3a4560;cursor:pointer" onclick="_editPondReg('${qid}','${reg.id}')">
+      <td style="padding:8px;color:#c4cad8">${idx+1}</td>
+      <td style="padding:8px">${tel}</td>
+      <td style="padding:8px;font-size:11px;color:#8b95aa">${perfil}</td>
+      <td style="padding:8px"><button class="btn btn-sm" onclick="event.stopPropagation();_editPondReg('${qid}','${reg.id}')">✏ Editar</button></td>
+    </tr>`;
+  }).join('');
+
+  m.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">
+      <button class="btn btn-sm" onclick="nav('ponderacao')">← Ponderação</button>
+      <div style="font-size:15px;font-weight:800;color:#f0f2f8">✏ Editar registros ponderados — ${q.nome}</div>
+    </div>
+    <div class="card">
+      <div style="font-size:12px;color:#8b95aa;margin-bottom:10px">${pond.length} registros ponderados · clique em Editar para abrir o questionário</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="background:#1e2433;font-size:11px;color:#8b95aa">
+            <th style="padding:8px;text-align:left">#</th>
+            <th style="padding:8px;text-align:left">Telefone</th>
+            <th style="padding:8px;text-align:left">Perfil</th>
+            <th style="padding:8px"></th>
+          </tr></thead>
+          <tbody>${linhas}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function _editPondReg(qid, regId) {
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return;
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const reg = DB.registros.find(r => String(r.id) === String(regId));
+  if (!reg) return toast('Registro não encontrado');
+
+  const pergs = (q.perguntas || []).sort((a,b) => (a.num||0)-(b.num||0));
+
+  const campos = pergs.map(p => {
+    const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+    const val = (reg.respostas || {})[chave] ?? (reg.respostas || {})[p.id] ?? '';
+    const opts = p.opts || [];
+    let input;
+    if (opts.length) {
+      const optsHtml = opts.map(o =>
+        `<option value="${o}" ${String(val) === String(o) ? 'selected' : ''}>${o}</option>`
+      ).join('');
+      input = `<select id="epr-${p.id}" style="width:100%;background:#1a1d2e;border:1.5px solid #3a4560;border-radius:6px;padding:6px 10px;color:#fff;font-family:inherit">
+        <option value="">(não respondeu)</option>${optsHtml}</select>`;
+    } else {
+      input = `<input type="text" id="epr-${p.id}" value="${String(val).replace(/"/g,'&quot;')}"
+        style="width:100%;background:#1a1d2e;border:1.5px solid #3a4560;border-radius:6px;padding:6px 10px;color:#fff;font-family:inherit">`;
+    }
+    return `<div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:4px">Col${p.num} — ${(p.txt||'').slice(0,70)}</div>
+      ${input}
+    </div>`;
+  }).join('');
+
+  // Demográficos editáveis
+  const demoHtml = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px;padding:12px;background:#1e2433;border-radius:8px">
+      <div><label style="font-size:11px;color:#8b95aa">Sexo</label>
+        <input type="text" id="epr-demo-sexo" value="${reg.sexo||''}"
+          style="width:100%;background:#1a1d2e;border:1.5px solid #3a4560;border-radius:6px;padding:6px 10px;color:#fff;font-family:inherit"></div>
+      <div><label style="font-size:11px;color:#8b95aa">Faixa etária</label>
+        <input type="text" id="epr-demo-faixa" value="${reg.faixa_etaria||''}"
+          style="width:100%;background:#1a1d2e;border:1.5px solid #3a4560;border-radius:6px;padding:6px 10px;color:#fff;font-family:inherit"></div>
+      <div><label style="font-size:11px;color:#8b95aa">Escolaridade</label>
+        <input type="text" id="epr-demo-instr" value="${reg.escolaridade||''}"
+          style="width:100%;background:#1a1d2e;border:1.5px solid #3a4560;border-radius:6px;padding:6px 10px;color:#fff;font-family:inherit"></div>
+      <div><label style="font-size:11px;color:#8b95aa">Região</label>
+        <input type="text" id="epr-demo-reg" value="${reg.regiao||''}"
+          style="width:100%;background:#1a1d2e;border:1.5px solid #3a4560;border-radius:6px;padding:6px 10px;color:#fff;font-family:inherit"></div>
+    </div>`;
+
+  const m = document.getElementById('adm-main');
+  m.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">
+      <button class="btn btn-sm" onclick="pgEditarPonderados('${qid}')">← Lista</button>
+      <div style="font-size:15px;font-weight:800;color:#f0f2f8">✏ Editando registro ponderado #${regId}</div>
+    </div>
+    <div class="card">
+      <div style="font-size:12px;color:#8b95aa;margin-bottom:12px">Edite os valores e clique em Salvar</div>
+      ${demoHtml}
+      <div style="max-height:600px;overflow-y:auto;padding-right:4px">${campos}</div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn btn-p" onclick="_salvarEditPond('${qid}','${regId}')">💾 Salvar alterações</button>
+        <button class="btn" onclick="pgEditarPonderados('${qid}')">Cancelar</button>
+      </div>
+    </div>`;
+}
+
+async function _salvarEditPond(qid, regId) {
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return;
+  const reg = DB.registros.find(r => String(r.id) === String(regId));
+  if (!reg) return toast('Registro não encontrado');
+
+  const pergs = (q.perguntas || []).sort((a,b) => (a.num||0)-(b.num||0));
+
+  // Coleta respostas dos inputs
+  const respostas = { ...(reg.respostas || {}) };
+  pergs.forEach(p => {
+    const el = document.getElementById(`epr-${p.id}`);
+    if (!el) return;
+    const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+    respostas[chave] = el.value;
+  });
+
+  // Coleta demográficos
+  reg.sexo        = document.getElementById('epr-demo-sexo')?.value || reg.sexo;
+  reg.faixa_etaria = document.getElementById('epr-demo-faixa')?.value || reg.faixa_etaria;
+  reg.escolaridade = document.getElementById('epr-demo-instr')?.value || reg.escolaridade;
+  reg.regiao      = document.getElementById('epr-demo-reg')?.value || reg.regiao;
+  reg.respostas   = respostas;
+
+  salvarTudo();
+  toast('⏳ Salvando no banco...');
+
+  // Salva no banco se tiver ID real
+  if (window.supabaseClient && !String(regId).startsWith('1782')) {
+    try {
+      const { error } = await window.supabaseClient.from('registros').update({
+        sexo: reg.sexo || null,
+        faixa_etaria: reg.faixa_etaria || null,
+        escolaridade: reg.escolaridade || null,
+        regiao: reg.regiao || null,
+        respostas
+      }).eq('id', regId);
+      if (error) toast('⚠ Erro ao salvar no banco: ' + error.message);
+      else toast('✓ Registro atualizado');
+    } catch(e) { toast('⚠ Erro: ' + e.message); }
+  } else {
+    toast('✓ Registro atualizado (local)');
+  }
+
+  pgEditarPonderados(qid);
 }
 
 function expCSV() {
