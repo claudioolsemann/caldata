@@ -14495,8 +14495,12 @@ function renderPonderacao() {
     </div>`;
   }).join('');
 
+  // Usa filtro do dropdown se existir
+  const filtroAtual = document.getElementById('pv-filtro')?.value || 'total';
+  const regsPergs = filtroAtual === 'reais' ? reais : filtroAtual === 'ponderadas' ? ponderados : [...reais,...ponderados];
+
   const pergBlocos = pergs.map(p => {
-    const dist = distPerg(reais, p);
+    const dist = distPerg(regsPergs, p);
     if (!dist.length) return '';
     const ESCL = {1:'ÓTIMA',2:'BOA',3:'REGULAR',4:'RUIM',5:'PÉSSIMA',6:'NÃO SABE',7:'NÃO RESPONDEU'};
     return `<div style="margin-bottom:10px">
@@ -14563,7 +14567,7 @@ function renderPonderacao() {
             style="padding:5px 12px;border:1.5px solid #3a4560;border-radius:8px;background:#2e3850;color:#8b95aa;cursor:pointer;font-size:12px;font-family:inherit;font-weight:700">📋 Perguntas</button>
           <button onclick="setPondVisao('editar')" id="pv-editar"
             style="padding:5px 12px;border:1.5px solid #3a4560;border-radius:8px;background:#2e3850;color:#8b95aa;cursor:pointer;font-size:12px;font-family:inherit;font-weight:700">✏ Editar valores</button>
-          <select id="pv-filtro" onchange="_pondAtualizarEdicao('${qid}')"
+          <select id="pv-filtro" onchange="renderPonderacao();_pondAtualizarEdicao('${qid}')"
             style="padding:4px 8px;background:#1e2433;border:1.5px solid #3a4560;border-radius:8px;color:#c4cad8;font-size:11px;font-family:inherit">
             <option value="total">Reais + Ponderadas (total)</option>
             <option value="reais">Só reais (${N})</option>
