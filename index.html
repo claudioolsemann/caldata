@@ -14375,9 +14375,13 @@ function renderPonderacao() {
   const qid = document.getElementById('pond-q-sel')?.value;
   const q   = DB.pesquisas.find(x => x.id == qid);
   if (!q) return;
+  // Usa banco_id para filtrar registros que vieram do banco (externos/ponderados)
+  // mas também aceita id local para retrocompatibilidade
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const _matchQid = r => r.pesquisa_id == qid || (qidBanco && r.pesquisa_id == qidBanco);
 
-  const reais     = DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1 && r.origem !== 'ponderacao');
-  const ponderados= DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1 && r.origem === 'ponderacao');
+  const reais     = DB.registros.filter(r => _matchQid(r) && r.status === 1 && r.origem !== 'ponderacao');
+  const ponderados= DB.registros.filter(r => _matchQid(r) && r.status === 1 && r.origem === 'ponderacao');
   const N  = reais.length;
   const NP = ponderados.length;
   const totalAtual = N + NP;
@@ -14772,15 +14776,17 @@ function calcularTotalManual() { atualizarTotalManual(); }
 function aplicarPonderacao(qid) {
   const q = DB.pesquisas.find(x => x.id == qid);
   if (!q) return;
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const _matchQid = r => r.pesquisa_id == qid || (qidBanco && r.pesquisa_id == qidBanco);
   const nome  = document.getElementById('pond-nome')?.value.trim() || 'Ponderação';
   const total = parseInt(document.getElementById('pond-total')?.value) || 0;
-  const reais = DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1 && r.origem !== 'ponderacao');
+  const reais = DB.registros.filter(r => _matchQid(r) && r.status === 1 && r.origem !== 'ponderacao');
   const N     = reais.length;
   const metodo = window._pondPreview?.metodo || 'auto';
 
   if (!total || total <= N) { toast('Informe um total maior que as entrevistas reais ('+N+')'); return; }
 
-  const qtdAdicionar = total - N - DB.registros.filter(r=>r.pesquisa_id==qid&&r.status===1&&r.origem==='ponderacao').length;
+  const qtdAdicionar = total - N - DB.registros.filter(r=>_matchQid(r)&&r.status===1&&r.origem==='ponderacao').length;
   if (!confirm(`Aplicar "${nome}"?\n${N} reais → ${total} total\nSerão criados ${total-N} registros de ponderação (método: ${metodo}).`)) return;
 
   const novos = [];
@@ -15033,6 +15039,26 @@ function importarQuestionarioExterno(input, qid) {
         const distInstr  = idxInstr  >= 0 ? contarDist(idxInstr)  : [];
         const distRegiao = idxRegiao >= 0 ? contarDist(idxRegiao) : [];
 
+        // Distribuição de todas as perguntas mapeadas (Col8+)
+        const distPergs = [];
+        Object.entries(colMap).forEach(([cidx, pid]) => {
+          const perg = perguntas.find(p => p.id == pid);
+          if (!perg) return;
+          // Pula demográficas (já mostradas acima)
+          const colNum = parseInt(String(header[parseInt(cidx)]).match(/Col(\d+)/i)?.[1] || 0);
+          if (colNum <= 7) return;
+          const dist = contarDist(parseInt(cidx));
+          if (dist.length) distPergs.push({ perg, dist });
+        });
+
+        const pergHtml = distPergs.map(({perg, dist}) => `
+          <div style="margin-bottom:14px;padding:10px;background:#1e2433;border-radius:8px">
+            <div style="font-size:11px;font-weight:700;color:#f0b840;margin-bottom:6px">
+              Col${perg.num} — ${(perg.txt||'').slice(0,80)}${(perg.txt||'').length>80?'...':''}
+            </div>
+            ${renderDist(dist, total)}
+          </div>`).join('');
+
         if (progressEl) progressEl.innerHTML = `
           <div style="background:rgba(29,158,117,.08);border-radius:10px;padding:14px;border:1px solid rgba(29,158,117,.25);margin-top:8px">
             <div style="font-size:14px;font-weight:800;color:#2dc98e;margin-bottom:12px">📋 Prévia — ${total} registros detectados</div>
@@ -15042,7 +15068,12 @@ function importarQuestionarioExterno(input, qid) {
               ${distInstr.length ? `<div><div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:6px">ESCOLARIDADE</div>${renderDist(distInstr,total)}</div>` : ''}
               ${distRegiao.length ? `<div><div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:6px">REGIÃO</div>${renderDist(distRegiao,total)}</div>` : ''}
             </div>
-            <div style="font-size:11px;color:#8b95aa;margin-bottom:10px">
+            ${pergHtml ? `
+            <div style="font-size:12px;font-weight:700;color:#8b95aa;margin-bottom:8px;border-top:1px solid #3a4560;padding-top:10px">
+              DISTRIBUIÇÃO POR PERGUNTA (${distPergs.length} perguntas)
+            </div>
+            <div style="max-height:400px;overflow-y:auto">${pergHtml}</div>` : ''}
+            <div style="font-size:11px;color:#8b95aa;margin:10px 0">
               Colunas mapeadas para perguntas: <strong style="color:#c4cad8">${Object.keys(colMap).length}</strong> de ${header.length - 2} colunas de dados
             </div>
             <div style="display:flex;gap:8px">
