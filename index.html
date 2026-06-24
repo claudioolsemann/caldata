@@ -14396,11 +14396,26 @@ function renderPonderacao() {
     });
   }
 
-  // Distribuição por pergunta
+  // Distribuição por pergunta — usa valores reais dos registros
   function distPerg(regs, perg) {
-    const opts = perg.tipo==='escala5' ? ['1','2','3','4','5','6','7'] : (perg.opts||[]);
-    return opts.map(opt => {
-      const cnt = regs.filter(r => _respMatch((r.respostas||{})[perg.id],opt)).length;
+    const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
+    // Coleta todos os valores distintos que aparecem nos registros
+    const valoresReais = new Set();
+    regs.forEach(r => {
+      const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
+      if (v != null && String(v).trim()) valoresReais.add(String(v).trim());
+    });
+    // Se tem opts cadastradas, usa como ordem base; senão usa valores reais
+    const optsBase = perg.tipo==='escala5'
+      ? (valoresReais.size > 0 ? [...valoresReais] : ['1','2','3','4','5','6','7'])
+      : (perg.opts && perg.opts.length ? perg.opts : [...valoresReais]);
+    // Garante que valores reais não cadastrados também apareçam
+    const todasOpts = [...new Set([...optsBase, ...valoresReais])];
+    return todasOpts.map(opt => {
+      const cnt = regs.filter(r => {
+        const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
+        return v != null && String(v).trim().toUpperCase() === String(opt).trim().toUpperCase();
+      }).length;
       return { opt, cnt, pct: regs.length ? Math.round(cnt/regs.length*100) : 0 };
     }).filter(x => x.cnt > 0);
   }
@@ -14428,7 +14443,7 @@ function renderPonderacao() {
     if (!dist.length) return '';
     const ESCL = {1:'ÓTIMA',2:'BOA',3:'REGULAR',4:'RUIM',5:'PÉSSIMA',6:'NÃO SABE',7:'NÃO RESPONDEU'};
     return `<div style="margin-bottom:10px">
-      <div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:4px;letter-spacing:.06em">${p.var_cod} — ${(p.txt||'').slice(0,50)}${(p.txt||'').length>50?'...':''}</div>
+      <div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:4px;letter-spacing:.06em">${p.var_cod || ('Col'+(p.num||'?'))} — ${(p.txt||'').slice(0,50)}${(p.txt||'').length>50?'...':''}</div>
       ${dist.map(x => `
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
           <div style="font-size:12px;color:#c4cad8;min-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.opt}${ESCL[parseInt(x.opt)]?' — '+ESCL[parseInt(x.opt)]:''}</div>
@@ -14484,14 +14499,23 @@ function renderPonderacao() {
         <div class="sc"><div class="sv">${q.meta||0}</div><div class="sl">Meta original</div></div>
       </div>
       ${dimBlocos||pergBlocos ? `
-        <div style="display:flex;gap:8px;margin-bottom:8px;border-bottom:1px solid #3a4560;padding-bottom:8px">
+        <div style="display:flex;gap:8px;margin-bottom:8px;border-bottom:1px solid #3a4560;padding-bottom:8px;flex-wrap:wrap;align-items:center">
           <button onclick="setPondVisao('perfil')" id="pv-perfil"
             style="padding:5px 12px;border:1.5px solid #FF4D00;border-radius:8px;background:rgba(255,77,0,.15);color:#FF7A40;cursor:pointer;font-size:12px;font-family:inherit;font-weight:700">👤 Perfis</button>
           <button onclick="setPondVisao('perguntas')" id="pv-perguntas"
             style="padding:5px 12px;border:1.5px solid #3a4560;border-radius:8px;background:#2e3850;color:#8b95aa;cursor:pointer;font-size:12px;font-family:inherit;font-weight:700">📋 Perguntas</button>
+          <button onclick="setPondVisao('editar')" id="pv-editar"
+            style="padding:5px 12px;border:1.5px solid #3a4560;border-radius:8px;background:#2e3850;color:#8b95aa;cursor:pointer;font-size:12px;font-family:inherit;font-weight:700">✏ Editar valores</button>
+          <select id="pv-filtro" onchange="_pondAtualizarEdicao('${qid}')"
+            style="padding:4px 8px;background:#1e2433;border:1.5px solid #3a4560;border-radius:8px;color:#c4cad8;font-size:11px;font-family:inherit">
+            <option value="total">Reais + Ponderadas (total)</option>
+            <option value="reais">Só reais (${N})</option>
+            <option value="ponderadas">Só ponderadas (${NP})</option>
+          </select>
         </div>
         <div id="pond-visao-perfil">${dimBlocos||'<div style="font-size:12px;color:#8b95aa">Nenhuma dimensão de cota ativa.</div>'}</div>
         <div id="pond-visao-perguntas" style="display:none">${pergBlocos||'<div style="font-size:12px;color:#8b95aa">Sem perguntas cruzáveis nesta pesquisa.</div>'}</div>
+        <div id="pond-visao-editar" style="display:none"><div style="font-size:12px;color:#8b95aa">Carregando...</div></div>
       ` : '<div style="font-size:12px;color:#8b95aa">Sem entrevistas registradas ainda.</div>'}
     </div>
 
@@ -14609,14 +14633,143 @@ function renderPonderacao() {
 }
 
 function setPondVisao(v) {
-  document.getElementById('pond-visao-perfil').style.display     = v==='perfil'    ?'block':'none';
-  document.getElementById('pond-visao-perguntas').style.display  = v==='perguntas' ?'block':'none';
-  document.getElementById('pv-perfil').style.borderColor     = v==='perfil'    ?'#FF4D00':'#3a4560';
-  document.getElementById('pv-perfil').style.background      = v==='perfil'    ?'rgba(255,77,0,.15)':'#2e3850';
-  document.getElementById('pv-perfil').style.color           = v==='perfil'    ?'#FF7A40':'#8b95aa';
-  document.getElementById('pv-perguntas').style.borderColor  = v==='perguntas' ?'#FF4D00':'#3a4560';
-  document.getElementById('pv-perguntas').style.background   = v==='perguntas' ?'rgba(255,77,0,.15)':'#2e3850';
-  document.getElementById('pv-perguntas').style.color        = v==='perguntas' ?'#FF7A40':'#8b95aa';
+  ['perfil','perguntas','editar'].forEach(tab => {
+    const el = document.getElementById('pond-visao-'+tab);
+    const btn = document.getElementById('pv-'+tab);
+    if (el) el.style.display = v===tab ? 'block' : 'none';
+    if (btn) {
+      btn.style.borderColor = v===tab ? '#FF4D00' : '#3a4560';
+      btn.style.background  = v===tab ? 'rgba(255,77,0,.15)' : '#2e3850';
+      btn.style.color       = v===tab ? '#FF7A40' : '#8b95aa';
+    }
+  });
+  if (v === 'editar') _pondAtualizarEdicao(window._pondQid);
+}
+
+function _pondAtualizarEdicao(qid) {
+  const el = document.getElementById('pond-visao-editar');
+  if (!el) return;
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return;
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const _matchQidFn = r => r.pesquisa_id == qid || r.pesquisa_id == qidBanco;
+
+  const filtro = document.getElementById('pv-filtro')?.value || 'total';
+  const reais     = DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem !== 'ponderacao');
+  const ponderados= DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem === 'ponderacao');
+  const todos     = [...reais, ...ponderados];
+  const base = filtro === 'reais' ? reais : filtro === 'ponderadas' ? ponderados : todos;
+  const N = base.length;
+  const metaTotal = parseInt(document.getElementById('pond-total')?.value) || (reais.length + ponderados.length);
+
+  const pergs = (q.perguntas||[]).filter(p => p.cruzavel || p.tipo === 'escala5').sort((a,b)=>(a.num||0)-(b.num||0));
+
+  const html = pergs.map(p => {
+    const chave = p.var_cod ? String(p.var_cod) : String(p.id);
+    // Coleta valores reais
+    const valSet = new Set();
+    base.forEach(r => {
+      const v = (r.respostas||{})[chave] ?? (r.respostas||{})[p.id];
+      if (v != null && String(v).trim()) valSet.add(String(v).trim());
+    });
+    if (!valSet.size) return '';
+    const vals = [...valSet];
+
+    const linhas = vals.map(opt => {
+      const cnt = base.filter(r => {
+        const v = (r.respostas||{})[chave] ?? (r.respostas||{})[p.id];
+        return v != null && String(v).trim().toUpperCase() === opt.toUpperCase();
+      }).length;
+      const pct = N ? Math.round(cnt/N*100) : 0;
+      const alvo = Math.round(pct/100 * metaTotal);
+      const inputKey = 'pedv-' + p.id + '-' + opt.replace(/\W+/g,'_');
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #252d40">
+        <div style="font-size:12px;color:#c4cad8;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${opt}</div>
+        <div style="flex:2;background:#2e3850;border-radius:3px;height:8px;min-width:60px">
+          <div style="height:100%;background:#1D9E75;border-radius:3px;width:${pct}%"></div>
+        </div>
+        <div style="font-size:11px;color:#8b95aa;min-width:60px;text-align:right">${cnt} (${pct}%)</div>
+        <div style="display:flex;align-items:center;gap:4px;min-width:120px">
+          <input type="number" id="${inputKey}" value="${pct}" min="0" max="100"
+            style="width:52px;padding:3px 6px;background:#1a1d2e;border:1.5px solid #3a4560;border-radius:6px;color:#f0f2f8;font-size:12px;font-family:inherit;text-align:center"
+            oninput="_pondEditarValor(this,'${p.id}','${opt.replace(/'/g,"\'")}',${metaTotal})">
+          <span style="font-size:10px;color:#8b95aa">% → <span id="${inputKey}-alvo" style="color:#f0b840;font-weight:700">${alvo}</span></span>
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div style="margin-bottom:14px;padding:10px;background:#1e2433;border-radius:8px">
+      <div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:6px">
+        ${p.var_cod || ('Col'+(p.num||'?'))} — ${(p.txt||'').slice(0,60)}${(p.txt||'').length>60?'...':''}
+      </div>
+      ${linhas}
+    </div>`;
+  }).filter(Boolean).join('');
+
+  el.innerHTML = html
+    ? `<div style="font-size:11px;color:#8b95aa;margin-bottom:8px">
+        Editando valores de <strong style="color:#f0b840">${N}</strong> registros (${filtro}) · meta total: <strong style="color:#f0b840">${metaTotal}</strong>
+        <br>Altere o % e o sistema recalcula a quantidade. Clique <strong style="color:#2dc98e">✅ Aplicar este resultado</strong> para usar esses valores na próxima ponderação.
+       </div>
+       <div style="max-height:500px;overflow-y:auto">${html}</div>
+       <button onclick="_pondAplicarEdicao('${qid}')" class="btn btn-p" style="margin-top:10px">✅ Aplicar valores editados como meta</button>`
+    : '<div style="font-size:12px;color:#8b95aa">Sem dados para editar.</div>';
+}
+
+function _pondEditarValor(input, pergId, opt, metaTotal) {
+  const pct = parseFloat(input.value) || 0;
+  const alvo = Math.round(pct / 100 * metaTotal);
+  const key = input.id + '-alvo';
+  const el = document.getElementById(key);
+  if (el) el.textContent = alvo;
+}
+
+function _pondAplicarEdicao(qid) {
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return;
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const _matchQidFn = r => r.pesquisa_id == qid || r.pesquisa_id == qidBanco;
+  const reais = DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem !== 'ponderacao');
+  const N = reais.length;
+  const metaTotal = parseInt(document.getElementById('pond-total')?.value) || 1000;
+
+  // Coleta todos os inputs de edição
+  const inputs = document.querySelectorAll('[id^="pedv-"]');
+  if (!inputs.length) return toast('Nenhum valor editado');
+
+  // Ativa Manual por pergunta e preenche campos
+  if (typeof setPondMetodo === 'function') setPondMetodo('pergunta');
+
+  setTimeout(() => {
+    let preenchidos = 0;
+    inputs.forEach(inp => {
+      const pct = parseFloat(inp.value) || 0;
+      // Extrai pergId e opt do id: pedv-{pergId}-{opt_normalizado}
+      const parts = inp.id.replace('pedv-','').split('-');
+      const pergId = parts[0];
+      const optNorm = parts.slice(1).join('-');
+      // Encontra o campo correspondente no Manual por pergunta
+      const q2 = DB.pesquisas.find(x => x.id == qid);
+      const perg = (q2?.perguntas||[]).find(p => String(p.id) === String(pergId));
+      if (!perg) return;
+      const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
+      const reaisComOpt = reais.filter(r => {
+        const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
+        return v != null && String(v).trim().replace(/\W+/g,'_').toLowerCase() === optNorm.toLowerCase();
+      }).length;
+      const alvoTotal = Math.round(pct/100 * metaTotal);
+      const adicionar = Math.max(0, alvoTotal - reaisComOpt);
+      // Busca input do manual por pergunta
+      const allInputs = document.querySelectorAll('[id^="pond-perg-' + perg.id + '-"]');
+      allInputs.forEach(el => {
+        el.value = adicionar;
+        preenchidos++;
+      });
+    });
+    if (typeof atualizarTotalManual === 'function') atualizarTotalManual();
+    toast(`✓ ${preenchidos} campos preenchidos — revise e clique em Aplicar ponderação`);
+    setPondVisao('perguntas');
+  }, 400);
 }
 
 function setPondMetodo(m) {
@@ -15055,17 +15208,34 @@ function importarResultadoPonderado(input, qid) {
         // ── Mapear blocos → perguntas cadastradas ──
         // Estratégia: para cada bloco não-demográfico, compara opções
         // com as opções de cada pergunta cadastrada (score de match)
+        // Coleta valores reais dos registros para cada pergunta
+        const qidBanco2 = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+        const _mq = r => r.pesquisa_id == qid || r.pesquisa_id == qidBanco2;
+        const reaisAtual = DB.registros.filter(r => _mq(r) && r.status === 1 && r.origem !== 'ponderacao');
+
+        function getValoresReais(perg) {
+          const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
+          const vals = new Set();
+          reaisAtual.forEach(r => {
+            const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
+            if (v != null && String(v).trim()) vals.add(String(v).trim());
+          });
+          return [...vals];
+        }
+
         function scoreMatch(blocoOpts, pergOpts) {
-          if (!pergOpts || !pergOpts.length) return 0;
+          // Usa tanto opts cadastradas quanto valores reais
+          const allOpts = [...(pergOpts||[])];
+          if (!allOpts.length) return 0;
           let hits = 0;
           blocoOpts.forEach(bo => {
             const bn = norm(bo.txt);
-            if (pergOpts.some(po => {
+            if (allOpts.some(po => {
               const pn = norm(po);
               return pn === bn || pn.includes(bn) || bn.includes(pn);
             })) hits++;
           });
-          return hits / Math.max(blocoOpts.length, pergOpts.length);
+          return hits / Math.max(blocoOpts.length, allOpts.length);
         }
 
         const mapeados = []; // { bloco, perg|null, tipo:'demo'|'perg', demoCampo }
@@ -15082,11 +15252,13 @@ function importarResultadoPonderado(input, qid) {
             continue;
           }
 
-          // Tenta mapear para pergunta cadastrada
+          // Tenta mapear para pergunta cadastrada usando opts + valores reais
           let melhorPerg = null, melhorScore = 0;
           for (const p of perguntas) {
-            const opts = p.opts || [];
-            const s = scoreMatch(bloco.opcoes, opts);
+            const optsBase = p.opts || [];
+            const optsReais = getValoresReais(p);
+            const allOpts = [...new Set([...optsBase, ...optsReais])];
+            const s = scoreMatch(bloco.opcoes, allOpts);
             if (s > melhorScore) { melhorScore = s; melhorPerg = p; }
           }
           // Aceita se score >= 0.3 (pelo menos 30% das opções batem)
