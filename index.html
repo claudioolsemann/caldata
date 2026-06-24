@@ -2599,6 +2599,8 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     async criarRegistro(params) {
       try {
         if (!params || !params.pesquisa_id) return { ok:false, error:'pesquisa_id obrigatório' };
+        // Detecta ID local (timestamp) em vez de banco_id — erro comum
+        if (params.pesquisa_id > 1_000_000_000_000) return { ok:false, error:'pesquisa_id inválido: use banco_id da pesquisa, não o id local' };
         if (!params.op_id) return { ok:false, error:'op_id obrigatório' };
         if (params.status == null) return { ok:false, error:'status obrigatório' };
         if (!params.status_txt) return { ok:false, error:'status_txt obrigatório' };
@@ -14930,6 +14932,8 @@ function importarQuestionarioExterno(input, qid) {
 
   const q = DB.pesquisas.find(x => x.id == qid);
   if (!q) return toast('Pesquisa não encontrada');
+  const pesquisaIdBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  if (!pesquisaIdBanco || isNaN(pesquisaIdBanco)) return toast('Pesquisa sem banco_id — salve a pesquisa primeiro');
   const perguntas = q.perguntas || [];
 
   const statusEl   = document.getElementById('pond-ext-status');
@@ -15050,7 +15054,7 @@ function importarQuestionarioExterno(input, qid) {
         if (statusEl) statusEl.textContent = `${total} registros prontos para importar — revise e confirme.`;
 
         // Guarda dados para confirmar depois
-        window._extPendente = { linhasDados, colMap, idxTel, idxSexo, idxIdade, idxInstr, idxRegiao, qid, file, perguntas, statusEl, progressEl };
+        window._extPendente = { linhasDados, colMap, idxTel, idxSexo, idxIdade, idxInstr, idxRegiao, qid, pesquisaIdBanco, file, perguntas, statusEl, progressEl };
 
       } catch(err) {
         console.error('[importarQuestionarioExterno]', err);
@@ -15083,7 +15087,7 @@ async function _extConfirmarImport() {
   if (!p) return;
   window._extPendente = null;
 
-  const { linhasDados, colMap, idxTel, idxSexo, idxIdade, idxInstr, idxRegiao, qid, file, perguntas, statusEl, progressEl } = p;
+  const { linhasDados, colMap, idxTel, idxSexo, idxIdade, idxInstr, idxRegiao, qid, pesquisaIdBanco, file, perguntas, statusEl, progressEl } = p;
   const total = linhasDados.length;
   const opId  = sessao?.id || null;
 
@@ -15120,7 +15124,7 @@ async function _extConfirmarImport() {
     });
 
     const payload = {
-      pesquisa_id:      parseInt(qid),
+      pesquisa_id:      pesquisaIdBanco,
       op_id:            opId,
       status:           1,
       status_txt:       'BEM SUCEDIDA',
@@ -15174,7 +15178,7 @@ async function _extConfirmarImport() {
   // Hidrata registros locais
   if (window.registrosSb) {
     try {
-      const r2 = await window.registrosSb.listarRegistros({ pesquisa_id: parseInt(qid), limit: 5000 });
+      const r2 = await window.registrosSb.listarRegistros({ pesquisa_id: pesquisaIdBanco, limit: 5000 });
       if (r2.ok && r2.data) {
         r2.data.forEach(reg => {
           if (!DB.registros.find(x => x.id === reg.id)) DB.registros.push(reg);
