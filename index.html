@@ -14365,9 +14365,66 @@ function pgPonderacao() {
     <div style="font-size:15px;font-weight:800;color:#f0f2f8;margin-bottom:1rem">⚖ Ponderação de Pesquisa</div>
     <div class="card">
       <label style="margin-top:0;font-size:12px;font-weight:700;color:#c4cad8">Selecionar pesquisa para ponderar</label>
-      <select id="pond-q-sel" style="font-size:15px;font-weight:700;padding:10px 12px;border:2px solid #FF4D00" onchange="renderPonderacao()">${qOpts}</select>
+      <select id="pond-q-sel" style="font-size:15px;font-weight:700;padding:10px 12px;border:2px solid #FF4D00" onchange="_pondCarregarRegistros()">` + qOpts + `</select>
     </div>
-    <div id="pond-body"></div>`;
+    <div id="pond-body"><div style="text-align:center;padding:2rem;color:#8b95aa">⏳ Carregando registros...</div></div>`;
+  _pondCarregarRegistros();
+}
+
+// Busca TODOS os registros da pesquisa diretamente do banco (sem filtro de status)
+// e sobrescreve os locais — garante que externos e ponderados estejam presentes
+async function _pondCarregarRegistros() {
+  const qid = document.getElementById('pond-q-sel')?.value;
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return;
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+
+  try {
+    // Busca direto da tabela, sem filtro de status, incluindo externos e ponderados
+    const { data, error } = await window.supabaseClient
+      .from('registros')
+      .select('id, dh, op_id, op_nome, pesquisa_id, pesquisa_nome, status, status_txt, duracao_seg, telefone, telefone_fonte, sexo, idade, faixa_etaria, escolaridade, renda, regiao, outras_dimensoes, respostas')
+      .eq('pesquisa_id', qidBanco)
+      .is('deletado_em', null)
+      .limit(10000);
+
+    if (!error && data) {
+      // Mapeia para formato local
+      const novos = data.map(r => ({
+        id: r.id,
+        _origem: 'banco',
+        dh: r.dh,
+        op_id: r.op_id,
+        op_nome: r.op_nome,
+        pesquisa_id: r.pesquisa_id,
+        pesquisa_nome: r.pesquisa_nome || q.nome || '',
+        status: r.status,
+        status_txt: r.status_txt,
+        duracao_seg: r.duracao_seg || 0,
+        telefone: r.telefone || '',
+        telefone_fonte: r.telefone_fonte || '',
+        sexo: r.sexo || '',
+        idade: r.idade || null,
+        faixa_etaria: r.faixa_etaria || '',
+        escolaridade: r.escolaridade || '',
+        renda: r.renda || '',
+        regiao: r.regiao || '',
+        celular: !!(r.outras_dimensoes && r.outras_dimensoes.celular),
+        origem: (r.outras_dimensoes && r.outras_dimensoes.origem) || '',
+        ponderacao_nome: (r.outras_dimensoes && r.outras_dimensoes.ponderacao_nome) || '',
+        id_original: (r.outras_dimensoes && r.outras_dimensoes.id_original) || null,
+        respostas: r.respostas || {}
+      }));
+
+      // Remove registros antigos desta pesquisa do DB local e adiciona os novos
+      DB.registros = DB.registros.filter(r => r.pesquisa_id != qid && r.pesquisa_id != qidBanco);
+      DB.registros.push(...novos);
+      console.log('[pond] carregados', novos.length, 'registros para pesquisa', qidBanco);
+    }
+  } catch(e) {
+    console.warn('[pond] erro ao carregar registros:', e);
+  }
+
   renderPonderacao();
 }
 
@@ -14769,6 +14826,10 @@ function _pondAplicarEdicao(qid) {
   // Guarda no estado global para calcularPonderacao usar
   window._pondValoresEditados = mapaValores;
 
+  // Garante que o total está preenchido
+  const totalEl = document.getElementById('pond-total');
+  if (totalEl && (!totalEl.value || parseInt(totalEl.value) < 1)) totalEl.value = metaTotal;
+
   // Ativa Manual por pergunta (renderiza os inputs pond-perg-*)
   if (typeof setPondMetodo === 'function') setPondMetodo('pergunta');
 
@@ -14813,7 +14874,9 @@ function calcularPonderacao() {
   const prev  = document.getElementById('pond-preview');
   if (!q || !prev) return;
 
-  const reais = DB.registros.filter(r => r.pesquisa_id == qid && r.status === 1 && r.origem !== 'ponderacao');
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const _matchQid = r => r.pesquisa_id == qid || (qidBanco && r.pesquisa_id == qidBanco);
+  const reais = DB.registros.filter(r => _matchQid(r) && r.status === 1 && r.origem !== 'ponderacao');
   const N     = reais.length;
 
   if (!total || total < N) {
