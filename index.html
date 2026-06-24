@@ -14445,6 +14445,29 @@ function renderPonderacao() {
     </div>`).join('') || '<div style="font-size:12px;color:#8b95aa">Nenhuma ponderação aplicada ainda.</div>';
 
   document.getElementById('pond-body').innerHTML = `
+    <!-- IMPORTAR QUESTIONÁRIO EXTERNO -->
+    <div class="card" style="border:1.5px solid #1D9E75">
+      <div class="card-title" style="color:#2dc98e">📂 Importar questionário externo</div>
+      <div style="font-size:12px;color:#8b95aa;margin-bottom:12px;line-height:1.5">
+        Importe uma planilha (<strong style="color:#c4cad8">.xlsx / .xls</strong>) com entrevistas realizadas em outro sistema.
+        O sistema detecta automaticamente as colunas demográficas e mapeia as respostas para as perguntas cadastradas nesta pesquisa.
+        Os registros entram com <strong style="color:#2dc98e">origem = externo</strong> e ficam disponíveis para ponderação.
+      </div>
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+        <label class="btn" style="cursor:pointer;margin:0;border-color:#1D9E75;color:#2dc98e;font-size:13px;font-weight:700">
+          📂 Selecionar planilha (.xlsx / .xls)
+          <input type="file" accept=".xlsx,.xls" style="display:none" onchange="importarQuestionarioExterno(this,'${qid}')">
+        </label>
+        <div id="pond-ext-status" style="font-size:12px;color:#8b95aa;padding:6px 0">Nenhuma importação realizada ainda.</div>
+      </div>
+      <div id="pond-ext-progress" style="margin-top:10px"></div>
+      <div style="margin-top:10px;padding:8px 10px;background:#1a2030;border-radius:8px;border-left:3px solid #1D9E75">
+        <div style="font-size:10px;font-weight:700;color:#555e78;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Formato esperado</div>
+        <div style="font-family:monospace;font-size:11px;color:#2dc98e">SEQUÊNCIA | TELEFONE | Col1 | Col2 | ... | ColN</div>
+        <div style="font-size:10px;color:#555e78;margin-top:3px">Colunas demográficas detectadas automaticamente · Perguntas mapeadas por número (Col1 = pergunta 1)</div>
+      </div>
+    </div>
+
     <!-- SITUAÇÃO ATUAL -->
     <div class="card">
       <div class="card-title">📊 Situação atual — ${q.nome}</div>
@@ -14890,6 +14913,212 @@ function excluirPonderacao(qid, idx) {
   }
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+//  IMPORTAR QUESTIONÁRIO EXTERNO — lê xlsx de campo externo e
+//  cria registros no banco com origem='externo', mapeando:
+//  • TELEFONE — coluna com header contendo TELEFONE/FONE/CELULAR
+//  • Demográficos — detectados por palavras-chave no header:
+//      SEXO → sexo | IDADE (agrupada/Col3) → faixa_etaria
+//      INSTRUÇÃO (agrupada/Col5) → escolaridade | REGIÃO/REGIAO → regiao
+//  • Perguntas — ColN → pergunta de num=N da pesquisa selecionada
+// ═══════════════════════════════════════════════════════════════
+function importarQuestionarioExterno(input, qid) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return toast('Pesquisa não encontrada');
+  const perguntas = q.perguntas || [];
+
+  const statusEl   = document.getElementById('pond-ext-status');
+  const progressEl = document.getElementById('pond-ext-progress');
+  if (statusEl) statusEl.textContent = '⏳ Lendo arquivo...';
+  if (progressEl) progressEl.innerHTML = '';
+
+  const doImport = () => {
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+        if (!rows.length) { if (statusEl) statusEl.textContent = '⚠ Planilha vazia.'; return; }
+
+        const header = rows[0].map(h => h == null ? '' : String(h).trim());
+
+        // ── Detectar índices das colunas ──
+        const idxTel = header.findIndex(h => /TELEFONE|FONE|CELULAR|NUMERO|NÚMERO/i.test(h));
+
+        // Demográficos — detecta por padrão ColN + palavra-chave
+        // SEXO=Col1, IDADE agrupada=Col3, INSTRUÇÃO agrupada=Col5, REGIÃO=Col7
+        function idxDemo(patterns) {
+          return header.findIndex(h => patterns.some(p => p.test(h)));
+        }
+        const idxSexo    = idxDemo([/\bSEXO\b/i]);
+        // Prefere Col3 (agrupada) sobre Col2 (detalhada)
+        const idxIdade   = (() => {
+          const c3 = header.findIndex(h => /Col3\b/i.test(h));
+          if (c3 >= 0) return c3;
+          return idxDemo([/IDADE/i, /FAIXA\s*ET[ÁA]RIA/i]);
+        })();
+        // Prefere Col5 (agrupada) sobre Col4 (detalhada)
+        const idxInstr   = (() => {
+          const c5 = header.findIndex(h => /Col5\b/i.test(h));
+          if (c5 >= 0) return c5;
+          return idxDemo([/INSTRU[ÇC][ÃA]O/i, /ESCOLARIDADE/i]);
+        })();
+        const idxRegiao  = (() => {
+          const c7 = header.findIndex(h => /Col7\b/i.test(h));
+          if (c7 >= 0) return c7;
+          return idxDemo([/REGI[ÃA]O/i, /REGIAO/i]);
+        })();
+
+        if (idxTel < 0) {
+          if (statusEl) statusEl.textContent = '⚠ Coluna TELEFONE não encontrada no cabeçalho.';
+          return;
+        }
+
+        // Mapeamento ColN → pergunta (por num)
+        // Cria mapa: índice da coluna → id da pergunta
+        const colMap = {}; // colIdx → pergunta.id
+        header.forEach((h, idx) => {
+          const m = String(h).match(/^Col(\d+)\b/i);
+          if (!m) return;
+          const num = parseInt(m[1]);
+          const perg = perguntas.find(p => p.num == num);
+          if (perg) colMap[idx] = perg.id;
+        });
+
+        // Normaliza valor demográfico
+        function normDemo(val) {
+          if (val == null) return '';
+          return String(val).trim();
+        }
+
+        // Conta linhas de dados
+        const linhasDados = rows.slice(1).filter(r => r && r.some(v => v != null));
+        const total = linhasDados.length;
+        if (!total) { if (statusEl) statusEl.textContent = '⚠ Nenhuma linha de dados encontrada.'; return; }
+
+        if (statusEl) statusEl.textContent = `⏳ Importando ${total} registros...`;
+        if (progressEl) progressEl.innerHTML = `
+          <div style="background:#2e3850;border-radius:6px;height:8px;overflow:hidden;margin-bottom:6px">
+            <div id="pond-ext-bar" style="height:100%;background:#2dc98e;width:0%;transition:width .3s"></div>
+          </div>
+          <div id="pond-ext-pct" style="font-size:11px;color:#8b95aa">0 / ${total}</div>`;
+
+        let ok = 0, falha = 0, semTel = 0;
+        const opId = sessao?.id || null;
+
+        for (let i = 0; i < linhasDados.length; i++) {
+          const row = linhasDados[i];
+
+          // Telefone
+          const telRaw = row[idxTel] == null ? '' : String(row[idxTel]).replace(/\D/g, '');
+          if (!telRaw || (telRaw.length < 10 || telRaw.length > 11)) { semTel++; continue; }
+
+          // Demográficos
+          const sexo       = normDemo(idxSexo   >= 0 ? row[idxSexo]   : null);
+          const faixaEt    = normDemo(idxIdade  >= 0 ? row[idxIdade]  : null);
+          const escolar    = normDemo(idxInstr  >= 0 ? row[idxInstr]  : null);
+          const regiao     = normDemo(idxRegiao >= 0 ? row[idxRegiao] : null);
+
+          // Respostas: { pergunta_id → valor }
+          const respostas = {};
+          Object.entries(colMap).forEach(([cidx, pid]) => {
+            const val = row[parseInt(cidx)];
+            if (val != null && String(val).trim() !== '') {
+              // Usa var_cod se existir, senão id
+              const perg = perguntas.find(p => p.id == pid);
+              const chave = perg?.var_cod ? String(perg.var_cod) : String(pid);
+              respostas[chave] = String(val).trim();
+            }
+          });
+
+          const payload = {
+            pesquisa_id:    parseInt(qid),
+            op_id:          opId,
+            status:         1,
+            status_txt:     'BEM SUCEDIDA',
+            duracao_seg:    0,
+            telefone:       telRaw,
+            telefone_fonte: 'externo',
+            telefone_id:    null,
+            sexo:           sexo || null,
+            idade:          null,
+            faixa_etaria:   faixaEt || null,
+            escolaridade:   escolar || null,
+            renda:          null,
+            regiao:         regiao || null,
+            outras_dimensoes: { origem: 'externo', arquivo: file.name },
+            respostas,
+            dh: new Date().toISOString()
+          };
+
+          if (window.registrosSb) {
+            const r = await window.registrosSb.criarRegistro(payload);
+            if (r.ok) ok++; else { falha++; console.warn('[ext] falha reg', i, r.error); }
+          } else {
+            // Fallback local
+            DB.registros.push({ ...payload, id: Date.now() + i, origem: 'externo' });
+            ok++;
+          }
+
+          // Atualiza progresso a cada 20 registros
+          if (i % 20 === 0 || i === linhasDados.length - 1) {
+            const pct = Math.round((i + 1) / total * 100);
+            const bar = document.getElementById('pond-ext-bar');
+            const pctEl = document.getElementById('pond-ext-pct');
+            if (bar) bar.style.width = pct + '%';
+            if (pctEl) pctEl.textContent = `${i + 1} / ${total}`;
+            await new Promise(r => setTimeout(r, 0)); // yield para render
+          }
+        }
+
+        // Resultado final
+        const msgs = [`✅ ${ok} registros importados com sucesso`];
+        if (semTel > 0) msgs.push(`${semTel} ignorados (sem telefone válido)`);
+        if (falha > 0)  msgs.push(`⚠ ${falha} com erro no banco`);
+
+        if (statusEl) statusEl.innerHTML = msgs.map(m => `<span style="margin-right:12px">${m}</span>`).join('');
+        if (progressEl) progressEl.innerHTML = '';
+
+        salvarTudo();
+        toast(`✓ ${ok} registros externos importados`);
+
+        // Força hidratação para refletir na situação atual
+        if (window.registrosSb) {
+          try {
+            const r2 = await window.registrosSb.listarRegistros({ pesquisa_id: parseInt(qid), limit: 5000 });
+            if (r2.ok && r2.data) {
+              r2.data.forEach(reg => {
+                if (!DB.registros.find(x => x.id === reg.id)) DB.registros.push(reg);
+              });
+            }
+          } catch(e) {}
+        }
+
+        renderPonderacao();
+
+      } catch(err) {
+        console.error('[importarQuestionarioExterno]', err);
+        if (statusEl) statusEl.textContent = '⚠ Erro ao processar arquivo: ' + (err.message || err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  if (window.XLSX) { doImport(); }
+  else {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = doImport;
+    s.onerror = () => { if (statusEl) statusEl.textContent = '⚠ Não foi possível carregar biblioteca xlsx.'; };
+    document.head.appendChild(s);
+  }
+}
 
 function importarBasePonderacao(input, qid) {
   const file = input.files[0];
