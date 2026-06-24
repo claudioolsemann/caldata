@@ -18287,11 +18287,11 @@ function parseQuestionario(texto, nomeArquivo) {
     if (m) return { numStr: m[1], num: parseInt(m[1]), var_cod: m[2], txt: m[3].trim() };
 
     // Forma 2: "N -TEXTO" / "N- TEXTO" / "N - TEXTO" / "N-TEXTO"
-    // Aceita: 1, 12, 1A, 2.1, Q1, Q2A
-    m = linha.match(/^(Q?\d{1,3}[A-Z]?(?:\.\d+)?)\s*-\s*(.+)$/i);
+    // Aceita: 1, 12, 1A, 2.1, Q1, Q2A, Col1, Col2A
+    m = linha.match(/^((?:Col|Q)?\d{1,3}[A-Z]?(?:\.\d+)?)\s*-\s*(.+)$/i);
     if (m) {
       const numStr = m[1].toUpperCase();
-      const numBase = parseInt(numStr.replace(/^Q/i,'').match(/^\d+/)[0]);
+      const numBase = parseInt(numStr.replace(/^(?:COL|Q)/i,'').match(/^\d+/)[0]);
       const txt = m[2].trim();
       if (/[?:]/.test(txt) || /[A-ZÁÉÍÓÚÊÂÔÃÕÇ]{5,}/.test(txt)) {
         return { numStr, num: numBase, var_cod: '', txt };
@@ -18299,10 +18299,10 @@ function parseQuestionario(texto, nomeArquivo) {
     }
 
     // Forma 3: "N TEXTO" (sem hífen) — exige ":" ou "?" + maiúsculas
-    m = linha.match(/^(Q?\d{1,3}[A-Z]?(?:\.\d+)?)\s+(.+)$/i);
+    m = linha.match(/^((?:Col|Q)?\d{1,3}[A-Z]?(?:\.\d+)?)\s+(.+)$/i);
     if (m) {
       const numStr = m[1].toUpperCase();
-      const numBase = parseInt(numStr.replace(/^Q/i,'').match(/^\d+/)[0]);
+      const numBase = parseInt(numStr.replace(/^(?:COL|Q)/i,'').match(/^\d+/)[0]);
       const txt = m[2].trim();
       if (/[?:]/.test(txt) && /[A-ZÁÉÍÓÚÊÂÔÃÕÇ]{4,}/.test(txt)) {
         return { numStr, num: numBase, var_cod: '', txt };
