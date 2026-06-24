@@ -15228,7 +15228,8 @@ function aplicarPonderacao(qid) {
   q.meta_ponderada = N + novos.length;
   salvarTudo();
   toast(`✓ Ponderação aplicada! ${novos.length} registros criados.`);
-  renderPonderacao();
+  // Recarrega do banco para limpar estado local e evitar dupla contagem
+  _pondCarregarRegistros();
 
   // ─── Salvar registros de ponderação no banco ───
   // Sem isso, a hidratação sobrescreve o localStorage e os registros somem.
