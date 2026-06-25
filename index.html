@@ -14793,14 +14793,59 @@ function _normKey(s) {
     .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
 }
 function _pondAplicarEdicao(qid) {
+  const q = DB.pesquisas.find(x => x.id == qid);
+  if (!q) return;
+  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  const _matchQidFn = r => r.pesquisa_id == qid || r.pesquisa_id == qidBanco;
+  const reais = DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem !== 'ponderacao');
   const metaTotal = parseInt(document.getElementById('pond-total')?.value) || 1000;
-  // Simplesmente aplica o modo automático com a meta definida
+
+  // Coleta os % editados dos inputs pedv-
+  const inputs = document.querySelectorAll('[id^="pedv-"]');
+  if (!inputs.length) { toast('Abra "Editar valores" primeiro'); return; }
+
+  // Monta mapa pergId → { optNorm → { pct, adicionar } }
+  const mapaValores = {};
+  inputs.forEach(inp => {
+    const pct = parseFloat(inp.value) || 0;
+    const semPrefix = inp.id.replace(/^pedv-/, '');
+    const dashIdx = semPrefix.indexOf('-');
+    if (dashIdx < 0) return;
+    const pergId = semPrefix.slice(0, dashIdx);
+    const optNorm = semPrefix.slice(dashIdx + 1);
+    const perg = (q.perguntas||[]).find(p => String(p.id) === String(pergId));
+    if (!perg) return;
+    const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
+    // Conta reais com essa opção
+    const reaisComOpt = reais.filter(r => {
+      const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
+      return v != null && _normKey(String(v)) === optNorm;
+    }).length;
+    const alvoTotal = Math.round(pct / 100 * metaTotal);
+    const adicionar = Math.max(0, alvoTotal - reaisComOpt);
+    if (!mapaValores[pergId]) mapaValores[pergId] = {};
+    mapaValores[pergId][optNorm] = adicionar;
+  });
+
+  // Guarda mapa para calcularPonderacao usar ao renderizar
+  window._pondValoresEditados = mapaValores;
+  // Ativa Manual por pergunta e preenche os campos com as quantidades calculadas
   const totalEl = document.getElementById('pond-total');
   if (totalEl) totalEl.value = metaTotal;
-  if (typeof setPondMetodo === 'function') setPondMetodo('auto');
-  toast('✓ Meta de ' + metaTotal + ' definida — revise a prévia e clique em Aplicar ponderação');
-  // Rola para o card de configuração
-  document.getElementById('pond-body')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (typeof setPondMetodo === 'function') setPondMetodo('pergunta');
+
+  setTimeout(() => {
+    let preenchidos = 0;
+    Object.entries(mapaValores).forEach(([pergId, opts]) => {
+      Object.entries(opts).forEach(([optNorm, adicionar]) => {
+        const el = document.getElementById('pond-perg-' + pergId + '-' + optNorm);
+        if (el) { el.value = adicionar; preenchidos++; }
+      });
+    });
+    if (typeof atualizarTotalManual === 'function') atualizarTotalManual();
+    toast('✓ ' + preenchidos + ' campos calculados — revise e clique em Aplicar ponderação');
+    document.getElementById('pond-body')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 600);
 }
 
 
@@ -14888,71 +14933,6 @@ function _normKey(s) {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
 }
-function _pondAplicarEdicao(qid) {
-  const q = DB.pesquisas.find(x => x.id == qid);
-  if (!q) return;
-  const qidBanco = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
-  const _matchQidFn = r => r.pesquisa_id == qid || r.pesquisa_id == qidBanco;
-  const reais = DB.registros.filter(r => _matchQidFn(r) && r.status === 1 && r.origem !== 'ponderacao');
-  const metaTotal = parseInt(document.getElementById('pond-total')?.value) || 1000;
-
-  // Coleta inputs de edição ANTES de trocar de visão (ainda estão no DOM)
-  const inputs = document.querySelectorAll('[id^="pedv-"]');
-  if (!inputs.length) { toast('Nenhum valor encontrado. Abra "Editar valores" primeiro.'); return; }
-
-  // Monta mapa: pergId → { optNorm → { pct, adicionar } }
-  const mapaValores = {};
-  inputs.forEach(inp => {
-    const pct = parseFloat(inp.value) || 0;
-    const semPrefix = inp.id.replace(/^pedv-/, '');
-    const dashIdx = semPrefix.indexOf('-');
-    if (dashIdx < 0) return;
-    const pergId = semPrefix.slice(0, dashIdx);
-    const optNorm = semPrefix.slice(dashIdx + 1);
-    const perg = (q.perguntas||[]).find(p => String(p.id) === String(pergId));
-    if (!perg) return;
-    const chave = perg.var_cod ? String(perg.var_cod) : String(perg.id);
-    // Conta reais com essa opção usando _normKey para comparar
-    const reaisComOpt = reais.filter(r => {
-      const v = (r.respostas||{})[chave] ?? (r.respostas||{})[perg.id];
-      return v != null && _normKey(String(v)) === optNorm;
-    }).length;
-    const alvoTotal = Math.round(pct / 100 * metaTotal);
-    const adicionar = Math.max(0, alvoTotal - reaisComOpt);
-    if (!mapaValores[pergId]) mapaValores[pergId] = {};
-    mapaValores[pergId][optNorm] = adicionar;
-  });
-
-  // Guarda no estado global para calcularPonderacao usar
-  window._pondValoresEditados = mapaValores;
-
-  // Garante que o total está preenchido
-  const totalEl = document.getElementById('pond-total');
-  if (totalEl && (!totalEl.value || parseInt(totalEl.value) < 1)) totalEl.value = metaTotal;
-
-  // Ativa Manual por pergunta (renderiza os inputs pond-perg-*)
-  if (typeof setPondMetodo === 'function') setPondMetodo('pergunta');
-
-  // Aguarda render do DOM e preenche os inputs
-  setTimeout(() => {
-    let preenchidos = 0;
-    Object.entries(mapaValores).forEach(([pergId, opts]) => {
-      Object.entries(opts).forEach(([optNorm, adicionar]) => {
-        const key = 'pond-perg-' + pergId + '-' + optNorm;
-        const el = document.getElementById(key);
-        if (el) { el.value = adicionar; preenchidos++; }
-      });
-    });
-    if (typeof atualizarTotalManual === 'function') atualizarTotalManual();
-    if (preenchidos > 0) {
-      toast('✓ ' + preenchidos + ' campos preenchidos — revise e clique em Aplicar ponderação');
-      setPondVisao('perguntas');
-    } else {
-      toast('⚠ Manual por pergunta não encontrou os campos. Verifique se as perguntas têm dados.');
-    }
-  }, 800);
-}
-
 
 function setPondMetodo(m) {
   window._pondMetodo = m;
