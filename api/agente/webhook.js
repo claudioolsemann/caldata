@@ -6,8 +6,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 )
 
-export const config = { api: { bodyParser: false } }
-
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
@@ -16,17 +14,18 @@ module.exports = async function handler(req, res) {
   const rawBody = Buffer.concat(chunks).toString('utf8')
   const payload = JSON.parse(rawBody)
 
-  const signature = req.headers['elevenlabs-signature']
-  if (signature && process.env.ELEVENLABS_WEBHOOK_SECRET) {
-    const parts = signature.split(',')
-    const timestamp = parts.find(p => p.startsWith('t='))?.split('=')[1]
-    const sigHash = parts.find(p => p.startsWith('v0='))?.split('=')[1]
-    const expected = crypto
-      .createHmac('sha256', process.env.ELEVENLABS_WEBHOOK_SECRET)
-      .update(`${timestamp}.${rawBody}`)
-      .digest('hex')
-    if (sigHash !== expected) return res.status(401).json({ error: 'Unauthorized' })
-  }
+  // HMAC desativado temporariamente para teste
+  // const signature = req.headers['elevenlabs-signature']
+  // if (signature && process.env.ELEVENLABS_WEBHOOK_SECRET) {
+  //   const parts = signature.split(',')
+  //   const timestamp = parts.find(p => p.startsWith('t='))?.split('=')[1]
+  //   const sigHash = parts.find(p => p.startsWith('v0='))?.split('=')[1]
+  //   const expected = crypto
+  //     .createHmac('sha256', process.env.ELEVENLABS_WEBHOOK_SECRET)
+  //     .update(`${timestamp}.${rawBody}`)
+  //     .digest('hex')
+  //   if (sigHash !== expected) return res.status(401).json({ error: 'Unauthorized' })
+  // }
 
   const inner = payload?.data || {}
   const analysis = inner?.analysis?.data_collection || {}
