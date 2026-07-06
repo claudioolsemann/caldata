@@ -9,25 +9,7 @@ const supabase = createClient(
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
-  const rawBody = Buffer.concat(chunks).toString('utf8')
-  const payload = JSON.parse(rawBody)
-
-  // HMAC desativado temporariamente para teste
-  // const signature = req.headers['elevenlabs-signature']
-  // if (signature && process.env.ELEVENLABS_WEBHOOK_SECRET) {
-  //   const parts = signature.split(',')
-  //   const timestamp = parts.find(p => p.startsWith('t='))?.split('=')[1]
-  //   const sigHash = parts.find(p => p.startsWith('v0='))?.split('=')[1]
-  //   const expected = crypto
-  //     .createHmac('sha256', process.env.ELEVENLABS_WEBHOOK_SECRET)
-  //     .update(`${timestamp}.${rawBody}`)
-  //     .digest('hex')
-  //   if (sigHash !== expected) return res.status(401).json({ error: 'Unauthorized' })
-  // }
-
-  const inner = payload?.data || {}
+  const inner = req.body?.data || {}
   const analysis = inner?.analysis?.data_collection || {}
   const metadata = inner?.metadata || {}
 
@@ -43,7 +25,7 @@ module.exports = async function handler(req, res) {
   const s = statusMap[inner?.status] || { status: 9, txt: 'Erro desconhecido' }
 
   const { data: reg, error } = await supabase.rpc('criar_registro', {
-    p_pesquisa_id:       parseInt(analysis.pesquisa_id || process.env.PESQUISA_ID_PADRAO),
+    p_pesquisa_id:       parseInt(process.env.PESQUISA_ID_PADRAO),
     p_op_id:             parseInt(process.env.IA_AGENT_OP_ID),
     p_status:            s.status,
     p_status_txt:        s.txt,
