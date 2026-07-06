@@ -23,11 +23,13 @@ module.exports = async function handler(req, res) {
     if (sigHash !== expected) return res.status(401).json({ error: 'Unauthorized' })
   }
 
-  const data = req.body
-  const analysis = data?.analysis?.data_collection || {}
-  const metadata = data?.metadata || {}
+  const payload = req.body
+  const inner = payload?.data || {}
+  const analysis = inner?.analysis?.data_collection || {}
+  const metadata = inner?.metadata || {}
 
   const statusMap = {
+    'done':         { status: 1, txt: 'Entrevista bem sucedida' },
     'completed':    { status: 1, txt: 'Entrevista bem sucedida' },
     'user_hangup':  { status: 4, txt: 'Abandonou a entrevista' },
     'agent_hangup': { status: 2, txt: 'Recusou responder a pesquisa' },
@@ -35,7 +37,7 @@ module.exports = async function handler(req, res) {
     'failed':       { status: 9, txt: 'Problema telefonia' }
   }
 
-  const s = statusMap[data.status] || { status: 9, txt: 'Erro desconhecido' }
+  const s = statusMap[inner?.status] || { status: 9, txt: 'Erro desconhecido' }
 
   const { data: reg, error } = await supabase.rpc('criar_registro', {
     p_pesquisa_id:       parseInt(analysis.pesquisa_id || process.env.PESQUISA_ID_PADRAO),
