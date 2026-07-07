@@ -12,7 +12,6 @@ module.exports = async function handler(req, res) {
   const dc = inner?.analysis?.data_collection || {}
   const metadata = inner?.metadata || {}
 
-  // busca o valor independente de maiúsculo/minúsculo
   const get = (key) => dc[key] || dc[key.toUpperCase()] || dc[key.toLowerCase()] || null
 
   const statusMap = {
@@ -27,11 +26,11 @@ module.exports = async function handler(req, res) {
   const s = statusMap[inner?.status] || { status: 9, txt: 'Erro desconhecido' }
 
   const respostas = {
-    p5: get('p5') || get('P5-VOTARIA_GOV_PR_ESPONTANEA'),
-    p6: get('p6') || get('P6-GOV_PR_ESTIMULADA'),
-    p7: get('p7') || get('P7-GOV_INTENCAOVOTO_SEGTURNO'),
-    p8: get('p8') || get('P8-GOVPR_REJEICAO'),
-    p9: get('p9') || get('P9-VOTO_PRESIDENTE_2TURNO'),
+    p5: get('P5-VOTARIA_GOV_PR_ESPONTANEA'),
+    p6: get('P6-GOV_PR_ESTIMULADA'),
+    p7: get('P7-GOV_INTENCAOVOTO_SEGTURNO'),
+    p8: get('P8-GOVPR_REJEICAO'),
+    p9: get('P9-VOTO_PRESIDENTE_2TURNO'),
   }
 
   const { data: reg, error } = await supabase.rpc('criar_registro', {
@@ -43,10 +42,10 @@ module.exports = async function handler(req, res) {
     p_telefone:          metadata.to_number || null,
     p_telefone_fonte:    'banco',
     p_telefone_id:       null,
-    p_sexo:              get('sexo') || get('SEXO'),
-    p_idade:             get('idade') || get('IDADE') ? parseInt(get('idade') || get('IDADE')) : null,
-    p_faixa_etaria:      get('faixa_etaria') || get('FAIXA_ETARIA'),
-    p_escolaridade:      get('escolaridade') || get('ESCOLARIDADE'),
+    p_sexo:              get('SEXO'),
+    p_idade:             get('IDADE') ? parseInt(get('IDADE')) : null,
+    p_faixa_etaria:      get('FAIXA_ETARIA'),
+    p_escolaridade:      get('ESCOLARIDADE'),
     p_renda:             null,
     p_regiao:            null,
     p_outras_dimensoes:  {},
