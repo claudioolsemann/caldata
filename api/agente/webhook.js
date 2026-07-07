@@ -1,7 +1,7 @@
 const { createClient } = require('@supabase/supabase-js')
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,
+  process.env.URL_SUPABASE || process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 )
 
@@ -9,7 +9,7 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
   const inner = req.body?.data || {}
-  const analysis = inner?.analysis?.data_collection || {}
+  const dc = inner?.analysis?.data_collection || {}
   const metadata = inner?.metadata || {}
 
   const statusMap = {
@@ -32,14 +32,14 @@ module.exports = async function handler(req, res) {
     p_telefone:          metadata.to_number || null,
     p_telefone_fonte:    'banco',
     p_telefone_id:       null,
-    p_sexo:              analysis.sexo || null,
-    p_idade:             analysis.idade ? parseInt(analysis.idade) : null,
-    p_faixa_etaria:      analysis.faixa_etaria || null,
-    p_escolaridade:      analysis.escolaridade || null,
-    p_renda:             analysis.renda || null,
-    p_regiao:            analysis.regiao || null,
+    p_sexo:              dc.sexo || null,
+    p_idade:             dc.idade ? parseInt(dc.idade) : null,
+    p_faixa_etaria:      dc.faixa_etaria || null,
+    p_escolaridade:      dc.escolaridade || null,
+    p_renda:             null,
+    p_regiao:            null,
     p_outras_dimensoes:  {},
-    p_respostas:         analysis.respostas || {},
+    p_respostas:         { p5: dc.p5, p6: dc.p6, p7: dc.p7, p8: dc.p8, p9: dc.p9 },
     p_dh:                null
   })
 
