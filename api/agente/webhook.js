@@ -1,7 +1,7 @@
 const { createClient } = require('@supabase/supabase-js')
 
 const supabase = createClient(
-  process.env.URL_SUPABASE || process.env.SUPABASE_URL,
+  process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 )
 
@@ -9,10 +9,8 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
   const inner = req.body?.data || {}
-  const dc = inner?.analysis?.data_collection || {}
+  const analysis = inner?.analysis?.data_collection || {}
   const metadata = inner?.metadata || {}
-
-  const get = (key) => dc[key] || dc[key.toUpperCase()] || dc[key.toLowerCase()] || null
 
   const statusMap = {
     'done':         { status: 1, txt: 'Entrevista bem sucedida' },
@@ -25,14 +23,6 @@ module.exports = async function handler(req, res) {
 
   const s = statusMap[inner?.status] || { status: 9, txt: 'Erro desconhecido' }
 
-  const respostas = {
-    p5: get('P5-VOTARIA_GOV_PR_ESPONTANEA'),
-    p6: get('P6-GOV_PR_ESTIMULADA'),
-    p7: get('P7-GOV_INTENCAOVOTO_SEGTURNO'),
-    p8: get('P8-GOVPR_REJEICAO'),
-    p9: get('P9-VOTO_PRESIDENTE_2TURNO'),
-  }
-
   const { data: reg, error } = await supabase.rpc('criar_registro', {
     p_pesquisa_id:       parseInt(process.env.PESQUISA_ID_PADRAO),
     p_op_id:             parseInt(process.env.IA_AGENT_OP_ID),
@@ -42,14 +32,14 @@ module.exports = async function handler(req, res) {
     p_telefone:          metadata.to_number || null,
     p_telefone_fonte:    'banco',
     p_telefone_id:       null,
-    p_sexo:              get('SEXO'),
-    p_idade:             get('IDADE') ? parseInt(get('IDADE')) : null,
-    p_faixa_etaria:      get('FAIXA_ETARIA'),
-    p_escolaridade:      get('ESCOLARIDADE'),
-    p_renda:             null,
-    p_regiao:            null,
+    p_sexo:              analysis.sexo || null,
+    p_idade:             analysis.idade ? parseInt(analysis.idade) : null,
+    p_faixa_etaria:      analysis.faixa_etaria || null,
+    p_escolaridade:      analysis.escolaridade || null,
+    p_renda:             analysis.renda || null,
+    p_regiao:            analysis.regiao || null,
     p_outras_dimensoes:  {},
-    p_respostas:         respostas,
+    p_respostas:         analysis.respostas || {},
     p_dh:                null
   })
 
