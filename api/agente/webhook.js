@@ -1,7 +1,7 @@
 const { createClient } = require('@supabase/supabase-js')
 
 const supabase = createClient(
-  process.env.URL_SUPABASE,
+  process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 )
 
@@ -11,13 +11,6 @@ module.exports = async function handler(req, res) {
   const inner = req.body?.data || {}
   const analysis = inner?.analysis?.data_collection || {}
   const metadata = inner?.metadata || {}
-
-  // Log para debug
-  console.log('INNER STATUS:', inner?.status)
-  console.log('ANALYSIS:', JSON.stringify(analysis))
-  console.log('METADATA:', JSON.stringify(metadata))
-  console.log('PESQUISA_ID_PADRAO:', process.env.PESQUISA_ID_PADRAO)
-  console.log('IA_AGENT_OP_ID:', process.env.IA_AGENT_OP_ID)
 
   const statusMap = {
     'done':         { status: 1, txt: 'Entrevista bem sucedida' },
@@ -50,9 +43,6 @@ module.exports = async function handler(req, res) {
     p_dh:                null
   })
 
-  if (error) {
-    console.log('ERRO RPC:', JSON.stringify(error))
-    return res.status(500).json({ error })
-  }
+  if (error) return res.status(500).json({ error })
   return res.status(200).json({ registro_id: reg })
 }
