@@ -3907,7 +3907,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v1-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v2-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -18878,11 +18878,13 @@ function iniciarEntrevista() {
   if (!ePesquisa||(ePesquisa.perguntas||[]).length===0) { toast('Questionário sem perguntas cadastradas'); return; }
   if (!ePesquisa.banco_id) { toast('❌ Pesquisa não sincronizada com o banco. Peça ao administrador para salvar o questionário.'); ePesquisa = null; return; }
   {
+    // Pergunta sem var_cod é válida (chave = 'p_'+banco_id). Bloqueia só: código repetido
+    // ou pergunta sem var_cod E sem banco_id (não sincronizada → chave instável).
     const _vc = (ePesquisa.perguntas||[]).map(p => p.var_cod ? String(p.var_cod).trim() : '');
-    const _semCod = _vc.filter(v => !v).length;
     const _dup = _vc.filter((v,i) => v && _vc.indexOf(v) !== i);
-    if (_semCod || _dup.length) {
-      toast('❌ Questionário com código de variável ' + (_semCod ? 'faltando (' + _semCod + ')' : 'duplicado (' + _dup[0] + ')') + '. Avise o administrador.');
+    const _semChave = (ePesquisa.perguntas||[]).filter(p => !(p.var_cod && String(p.var_cod).trim()) && !p.banco_id).length;
+    if (_dup.length || _semChave) {
+      toast('❌ Questionário com ' + (_dup.length ? 'código de variável duplicado (' + _dup[0] + ')' : _semChave + ' pergunta(s) não sincronizada(s) com o banco') + '. Avise o administrador.');
       ePesquisa = null; return;
     }
   }
@@ -19191,7 +19193,7 @@ function _finalizarComVerif(demo){
   // Converte eResps de {p.id → valor} para {var_cod → valor} antes de gravar no banco
   const _respostasVarCod = {};
   (ePesquisa?.perguntas || []).forEach(p => {
-    const chave = p.var_cod ? String(p.var_cod) : p.id;
+    const chave = p.var_cod ? String(p.var_cod) : (p.banco_id ? 'p_' + p.banco_id : p.id);
     if (eResps[p.id] !== undefined) _respostasVarCod[chave] = eResps[p.id];
   });
 
@@ -19366,7 +19368,7 @@ function registrarCotaEncerrada() {
   // Respostas coletadas até o bloqueio, chaveadas por var_cod (mesmo padrão do finalizarE)
   const _respostasVarCod = {};
   (ePesquisa?.perguntas || []).forEach(p => {
-    const chave = p.var_cod ? String(p.var_cod) : p.id;
+    const chave = p.var_cod ? String(p.var_cod) : (p.banco_id ? 'p_' + p.banco_id : p.id);
     if (eResps[p.id] !== undefined) _respostasVarCod[chave] = eResps[p.id];
   });
   DB.registros.push({id:agora,dh:new Date(agora).toISOString(),op_id:sessao.id,op_nome:sessao.nome,
