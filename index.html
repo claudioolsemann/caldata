@@ -3725,8 +3725,8 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         💬
         <span id="chat-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#FF4D00;color:#fff;border-radius:50%;width:16px;height:16px;font-size:9px;font-weight:800;line-height:16px;text-align:center">!</span>
       </button>
-      <button class="btn btn-sm" onclick="abreM('m-pausa')" style="color:#f0b840;border-color:#f0b840">⏸ Pausa</button>
-      <button class="btn btn-sm" onclick="logout()">Sair</button>
+      <button class="btn btn-sm" id="op-btn-pausa" onclick="if(!_opBloqueioLigacao('pausar'))abreM('m-pausa')" style="color:#f0b840;border-color:#f0b840">⏸ Pausa</button>
+      <button class="btn btn-sm" id="op-btn-sair" onclick="logout()">Sair</button>
     </div>
   </div>
   <div class="op-body" id="op-body"></div>
@@ -3907,7 +3907,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v2-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v3-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4083,10 +4083,7 @@ function ir(t) {
 }
 
 async function logout() {
-  if (sessao && sessao.perfil === 'operador' && window._telAtual) {
-    toast('⚠ Registre o status desta ligação antes de sair');
-    return;
-  }
+  if (sessao && sessao.perfil === 'operador' && _opBloqueioLigacao('sair')) return;
   // Para heartbeat imediatamente
   try { if (typeof window._pararHeartbeat === 'function') window._pararHeartbeat(); } catch(_){}
   // Libera sessão no banco ANTES de redirecionar
@@ -19425,6 +19422,30 @@ function registrarCotaEncerrada() {
   renderOpInicio();
 }
 
+// Bloqueio claro quando há ligação em aberto (mensagem na tela, não só toast)
+function _opBloqueioLigacao(acao) {
+  const t = window._telAtual;
+  if (!t) return false;
+  const tel = (t.telefone && t.telefone.tel) ? t.telefone.tel : '';
+  try {
+    alert('⚠ LIGAÇÃO EM ABERTO' + (tel ? ' — ' + tel : '') + '\n\n' +
+          'Antes de ' + acao + ', registre o resultado desta ligação:\n' +
+          '• um dos botões de status (ex.: 12. Não atende), ou\n' +
+          '• finalize ou marque "Abandonou" na entrevista.');
+  } catch(_) { if (typeof toast === 'function') toast('⚠ Registre o status desta ligação antes de ' + acao); }
+  return true;
+}
+// Indicador visual: Pausa/Sair ficam apagados enquanto há ligação em aberto
+setInterval(() => {
+  const aberto = !!window._telAtual;
+  ['op-btn-pausa','op-btn-sair'].forEach(id => {
+    const b = document.getElementById(id);
+    if (!b) return;
+    b.style.opacity = aberto ? '0.35' : '';
+    b.title = aberto ? 'Registre o status da ligação em aberto para liberar' : '';
+  });
+}, 500);
+
 // Feedback visível da gravação no banco (operador sabe se foi gravado ou ficou na fila)
 window._opGravFeedback = function(ok, id) {
   window._opUltGrav = { ok: !!ok, id: id || null, t: Date.now() };
@@ -19442,7 +19463,7 @@ window._opGravFeedback = function(ok, id) {
 // ══════════════════════════════════
 async function iniciarPausa(tipo, emoji) {
   fechaM('m-pausa');
-  if (window._telAtual) { toast('⚠ Registre o status desta ligação antes de pausar'); return; }
+  if (_opBloqueioLigacao('pausar')) return;
   if (!sessao || !sessao.id) { toast('Sessão inválida'); return; }
   const qid = document.getElementById('op-q-sel')?.value || '';
   const q = DB.pesquisas.find(p => p.id == qid);
