@@ -3105,14 +3105,30 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
 
   // Adiciona um payload na fila (com timestamp e tentativas zeradas)
   function _pendentesPush(payload) {
-    const arr = _pendentesList();
-    arr.push({
+    const item = {
       _local_id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2,8),
       _criado_em: new Date().toISOString(),
       _tentativas: 0,
       payload
-    });
-    localStorage.setItem(_PEND_KEY, JSON.stringify(arr));
+    };
+    const arr = _pendentesList();
+    arr.push(item);
+    try {
+      localStorage.setItem(_PEND_KEY, JSON.stringify(arr));
+    } catch (e1) {
+      // localStorage cheio: libera o cache local de registros (o banco é a fonte; é re-hidratado)
+      console.warn('[integridade] localStorage cheio ao enfileirar — liberando cache local de registros', e1);
+      try { localStorage.removeItem('call_registros'); } catch(_) {}
+      try {
+        localStorage.setItem(_PEND_KEY, JSON.stringify(arr));
+      } catch (e2) {
+        // Último recurso: mantém em memória e avisa o operador de forma visível
+        console.error('[integridade] não foi possível gravar pendente no localStorage', e2);
+        window._pendentesMemoria = window._pendentesMemoria || [];
+        window._pendentesMemoria.push(item);
+        try { alert('⚠ ATENÇÃO: o registro não foi para o banco e o navegador está sem espaço.\nNÃO FECHE esta aba. Chame o supervisor.'); } catch(_) {}
+      }
+    }
     _atualizarBadgePendentes();
   }
 
@@ -3134,7 +3150,24 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
   // Tenta reenviar todos os pendentes; chamado pelo worker e em demanda.
   // interativo=true → ao final, se ainda sobrar pendente, mostra o erro real
   // na tela e oferece descartar (pra nunca ficar preso sem saber o motivo).
+  let _pendProcessando = false;
   async function _pendentesProcessar(interativo) {
+    if (_pendProcessando) { if (interativo && typeof toast === 'function') toast('Envio em andamento, aguarde...'); return; }
+    _pendProcessando = true;
+    try { await _pendentesProcessarInterno(interativo); }
+    finally { _pendProcessando = false; }
+  }
+  async function _pendentesProcessarInterno(interativo) {
+    // Reenvia primeiro o que ficou só em memória (localStorage cheio)
+    if (Array.isArray(window._pendentesMemoria) && window._pendentesMemoria.length && window.registrosSb) {
+      const fila = window._pendentesMemoria.slice();
+      for (const it of fila) {
+        try {
+          const rm = await window.registrosSb.criarRegistro(it.payload);
+          if (rm.ok) window._pendentesMemoria = window._pendentesMemoria.filter(x => x._local_id !== it._local_id);
+        } catch(_) {}
+      }
+    }
     if (!window.registrosSb || !window.supabaseClient) {
       if (interativo) alert('Banco indisponível agora. Verifique a conexão e tente de novo.');
       return;
@@ -3184,12 +3217,17 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         const ult = restantes[restantes.length - 1];
         const msg = '⚠ Não consegui enviar ' + restantes.length + ' registro(s) ao banco.\n\n' +
                     'Último erro do banco:\n' + (ult._ultimo_erro || 'desconhecido') + '\n\n' +
-                    'Esses registros NÃO entraram no banco. Deseja DESCARTÁ-LOS?\n' +
-                    '(OK = descarta e limpa o aviso · Cancelar = mantém na fila)';
+                    'Os registros CONTINUAM guardados neste computador e serão reenviados automaticamente.\n' +
+                    'NÃO limpe o navegador. Chame o supervisor.\n\n' +
+                    'OK = baixar uma cópia de segurança (arquivo .json) · Cancelar = fechar';
         if (confirm(msg)) {
-          localStorage.setItem(_PEND_KEY, '[]');
-          _atualizarBadgePendentes();
-          if (typeof toast === 'function') toast('Pendentes descartados');
+          try {
+            const blob = new Blob([JSON.stringify(restantes, null, 2)], {type:'application/json'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'pendentes_calldata_' + new Date().toISOString().replace(/[:.]/g,'-') + '.json';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          } catch(eDl) { console.error('[integridade] falha ao baixar pendentes', eDl); }
         }
       }
     }
@@ -3222,6 +3260,13 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
 
   // Worker: tenta reenviar a cada 30s
   setInterval(_pendentesProcessar, 30000);
+
+  // Integridade: avisa antes de fechar a aba se há registro não enviado ou ligação sem status
+  window.addEventListener('beforeunload', (ev) => {
+    const temPend = _pendentesList().length > 0 || (Array.isArray(window._pendentesMemoria) && window._pendentesMemoria.length > 0);
+    const temLigacao = !!window._telAtual;
+    if (temPend || temLigacao) { ev.preventDefault(); ev.returnValue = ''; return ''; }
+  });
 
   // Tenta processar quando o navegador detecta que voltou online
   window.addEventListener('online', () => {
@@ -3862,7 +3907,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'respostas-agrupar-v4-2026-06-12'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v1-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4038,6 +4083,10 @@ function ir(t) {
 }
 
 async function logout() {
+  if (sessao && sessao.perfil === 'operador' && window._telAtual) {
+    toast('⚠ Registre o status desta ligação antes de sair');
+    return;
+  }
   // Para heartbeat imediatamente
   try { if (typeof window._pararHeartbeat === 'function') window._pararHeartbeat(); } catch(_){}
   // Libera sessão no banco ANTES de redirecionar
@@ -13491,6 +13540,8 @@ function copiarMensagemCompleta() {
 }
 
 function baixarCallOperador() {
+  toast('⚠ Desativado: o arquivo offline não grava no banco. Use o sistema online.');
+  return;
   // Gera o call-operador.html com tema dark, standalone, usando os mesmos dados do localStorage
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -18205,7 +18256,7 @@ function renderOpInicio() {
       ${telDisplay}
       <div style="display:flex;gap:8px;margin-bottom:8px">
         <button onclick="sortearTelefone()" style="flex:1;padding:11px;border:none;border-radius:10px;background:linear-gradient(135deg,#1D9E75,#0d6b50);color:#fff;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">🎲 Sortear</button>
-        ${telAtual ? `<button onclick="marcarUsadoEAvancar()" style="flex:1;padding:11px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">✓ Usar e avançar</button>` : ''}
+        ${false && telAtual ? `<button onclick="marcarUsadoEAvancar()" style="flex:1;padding:11px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">✓ Usar e avançar</button>` : ''}
       </div>
       <div style="border-top:1px solid #3a4560;padding-top:10px">
         <div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:6px">OU COLE UM NÚMERO DIRETAMENTE</div>
@@ -18233,7 +18284,7 @@ function renderOpInicio() {
         <div style="flex:1"><div style="font-size:24px;font-weight:800;color:#f2f4fa;letter-spacing:1px;font-family:monospace">${telFmt}</div></div>
         <button onclick="copiarTel('${t.tel}')" style="padding:8px 14px;border:1.5px solid #3a4560;border-radius:8px;background:#2e3850;color:#c4cad8;cursor:pointer;font-size:13px;font-family:inherit;font-weight:700">📋 Copiar</button>
       </div>
-      <button onclick="marcarUsadoEAvancar()" style="width:100%;margin-bottom:8px;padding:11px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">✓ Usar e avançar</button>`;
+      <button onclick="marcarUsadoEAvancar()" hidden style="width:100%;margin-bottom:8px;padding:11px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">✓ Usar e avançar</button>`;
     })() : '';
     telCard = `<div class="op-card" style="border-left:3px solid #378ADD">
       <div style="font-size:13px;font-weight:700;color:#c4cad8;margin-bottom:8px">📞 Telefone para ligar</div>
@@ -18480,6 +18531,7 @@ function releituraMsgOp(msgId) {
 
 function usarTelManual() {
   if (!_opAutorizado()) return;
+  if (window._telAtual) { toast('⚠ Registre o status do número atual antes de usar outro'); return; }
   const input = document.getElementById('op-tel-manual');
   const tel = (input?.value||'').replace(/\D/g,'');
   if (tel.length < 10 || tel.length > 11) { toast('Digite um número válido com DDD (10 ou 11 dígitos)'); return; }
@@ -18508,6 +18560,7 @@ function usarTelManual() {
 
 async function sortearTelefone() {
   if (!_opAutorizado()) return;
+  if (window._telAtual) { toast('⚠ Registre o status do número atual antes de sortear outro'); return; }
 
   const btn = document.querySelector('button[onclick="sortearTelefone()"]');
   let labelOrig = '';
@@ -18679,6 +18732,9 @@ async function sortearTelefone() {
 
 function marcarUsadoEAvancar() {
   if (!window._telAtual) return;
+  // Integridade: todo número sorteado precisa terminar com status gravado
+  toast('⚠ Registre um status para este número (botões abaixo) ou inicie a entrevista');
+  return;
   // Se veio do banco ou localidade, já foi marcado atomicamente no sortear → só limpa estado
   if (window._telAtual._fonte === 'banco' || window._telAtual._fonte === 'localidade') {
     window._telAtual = null;
@@ -18778,12 +18834,15 @@ function regStatus(cod, txt) {
       const r = await window.registrosSb.criarRegistro(_payloadReg);
       if (!r.ok) {
         console.warn('[fase4] criar_registro falhou, indo pra fila:', r.error);
+        if (typeof window._opGravFeedback === 'function') window._opGravFeedback(false);
         if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadReg);
       } else {
         console.log('[fase4] regStatus → banco id:', r.data?.id);
+        if (typeof window._opGravFeedback === 'function') window._opGravFeedback(true, r.data?.id);
       }
     } catch(e) {
       console.warn('[fase4] erro inesperado em regStatus, indo pra fila:', e);
+      if (typeof window._opGravFeedback === 'function') window._opGravFeedback(false);
       if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadReg);
     }
   })();
@@ -18817,6 +18876,16 @@ function iniciarEntrevista() {
   ePesquisa = DB.pesquisas.find(p => p.id == qid)
            || DB.pesquisas.find(p => p.banco_id != null && p.banco_id == qid);
   if (!ePesquisa||(ePesquisa.perguntas||[]).length===0) { toast('Questionário sem perguntas cadastradas'); return; }
+  if (!ePesquisa.banco_id) { toast('❌ Pesquisa não sincronizada com o banco. Peça ao administrador para salvar o questionário.'); ePesquisa = null; return; }
+  {
+    const _vc = (ePesquisa.perguntas||[]).map(p => p.var_cod ? String(p.var_cod).trim() : '');
+    const _semCod = _vc.filter(v => !v).length;
+    const _dup = _vc.filter((v,i) => v && _vc.indexOf(v) !== i);
+    if (_semCod || _dup.length) {
+      toast('❌ Questionário com código de variável ' + (_semCod ? 'faltando (' + _semCod + ')' : 'duplicado (' + _dup[0] + ')') + '. Avise o administrador.');
+      ePesquisa = null; return;
+    }
+  }
   DB.registros = loadDB('registros',[]);
   const validas = DB.registros.filter(r=>r.pesquisa_id==qid&&r.status===1);
   const meta = ePesquisa.meta||0;
@@ -19058,12 +19127,15 @@ function confAbandono(){
       const r = await window.registrosSb.criarRegistro(_payloadAb);
       if (!r.ok) {
         console.warn('[fase4] confAbandono falhou, indo pra fila:', r.error);
+        if (typeof window._opGravFeedback === 'function') window._opGravFeedback(false);
         if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadAb);
       } else {
         console.log('[fase4] confAbandono → banco id:', r.data?.id);
+        if (typeof window._opGravFeedback === 'function') window._opGravFeedback(true, r.data?.id);
       }
     } catch(e) {
       console.warn('[fase4] erro inesperado em confAbandono, indo pra fila:', e);
+      if (typeof window._opGravFeedback === 'function') window._opGravFeedback(false);
       if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadAb);
     }
   })();
@@ -19154,12 +19226,15 @@ function _finalizarComVerif(demo){
       const r = await window.registrosSb.criarRegistro(_payloadFin);
       if (!r.ok) {
         console.warn('[fase4] finalizarE falhou, indo pra fila:', r.error);
+        if (typeof window._opGravFeedback === 'function') window._opGravFeedback(false);
         if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadFin);
       } else {
         console.log('[fase4] finalizarE → banco id:', r.data?.id);
+        if (typeof window._opGravFeedback === 'function') window._opGravFeedback(true, r.data?.id);
       }
     } catch(e) {
       console.warn('[fase4] erro inesperado em finalizarE, indo pra fila:', e);
+      if (typeof window._opGravFeedback === 'function') window._opGravFeedback(false);
       if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadFin);
     }
   })();
@@ -19176,6 +19251,7 @@ function _finalizarComVerif(demo){
     <div class="op-card" style="text-align:center;padding:2.5rem 1.25rem">
       <div style="font-size:52px;margin-bottom:12px">✅</div>
       <div style="font-size:22px;font-weight:800;margin-bottom:6px">Entrevista registrada!</div>
+      <div id="op-grav-status" style="font-size:13px;font-weight:700;color:#8b95aa;margin-bottom:8px">⏳ Enviando ao banco...</div>
       <p style="color:#c4cad8;font-size:14px;margin-bottom:.5rem">Você fez <strong style="color:#e8eaf0">${eCont.v}</strong> entrevistas válidas hoje.</p>
       <p style="color:#c4cad8;font-size:13px;margin-bottom:1.5rem">Duração: <strong style="color:#e8eaf0">${fmtSeg(duracao_seg)}</strong></p>
       ${ePesquisa.encerramento?`<div class="script-box" style="text-align:left;margin-bottom:1.5rem">${ePesquisa.encerramento}</div>`:''}
@@ -19252,7 +19328,7 @@ function mostrarTelaCotaBloqueada(bloqueadas, demo) {
     </div>`}
 
     <div style="display:flex;gap:8px;margin-top:.5rem">
-      <button onclick="renderOpInicio()" style="flex:1;padding:13px;border:1.5px solid #3a4560;border-radius:12px;background:#2e3850;color:#c4cad8;cursor:pointer;font-size:14px;font-family:inherit;font-weight:700">← Voltar</button>
+      <button onclick="renderOpPerg()" style="flex:1;padding:13px;border:1.5px solid #3a4560;border-radius:12px;background:#2e3850;color:#c4cad8;cursor:pointer;font-size:14px;font-family:inherit;font-weight:700">← Voltar</button>
       <button onclick="registrarCotaEncerrada()" style="flex:1;padding:13px;border:none;border-radius:12px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">Registrar cota encerrada</button>
     </div>`;
 }
@@ -19277,15 +19353,86 @@ function iniciarComPerfil(valorSexo, dim) {
 }
 
 function registrarCotaEncerrada() {
+  if (!_opAutorizado()) return;
   const q = DB.pesquisas.find(p=>p.id===ePesquisa.id);
-  const duracao_seg = _entrevistaInicio ? Math.round((Date.now()-_entrevistaInicio)/1000) : 0;
+  const agora = Date.now();
+  const duracao_seg = _entrevistaInicio ? Math.round((agora-_entrevistaInicio)/1000) : 0;
   eCont.r++; eCont.t++;
-  DB.registros.push({id:Date.now(),dh:new Date().toISOString(),op_id:sessao.id,op_nome:sessao.nome,
-    pesquisa_id:ePesquisa.id,pesquisa_nome:q?.nome||'',status:5,status_txt:'COTA ENCERRADA',duracao_seg,respostas:{}});
+  const telUsado = window._telAtual?.telefone?.tel || '';
+  const telFonte = window._telAtual?._fonte || 'manual';
+  const telBancoId = window._telAtual?._telBancoId || null;
+  let demo = {};
+  try { demo = _coletarDemo() || {}; } catch(e) { console.warn('[integridade] _coletarDemo falhou em cota encerrada', e); }
+  // Respostas coletadas até o bloqueio, chaveadas por var_cod (mesmo padrão do finalizarE)
+  const _respostasVarCod = {};
+  (ePesquisa?.perguntas || []).forEach(p => {
+    const chave = p.var_cod ? String(p.var_cod) : p.id;
+    if (eResps[p.id] !== undefined) _respostasVarCod[chave] = eResps[p.id];
+  });
+  DB.registros.push({id:agora,dh:new Date(agora).toISOString(),op_id:sessao.id,op_nome:sessao.nome,
+    pesquisa_id:ePesquisa.banco_id ? parseInt(ePesquisa.banco_id) : ePesquisa.id,pesquisa_nome:q?.nome||ePesquisa.nome||'',
+    status:5,status_txt:'COTA ENCERRADA',...demo,duracao_seg,telefone:telUsado,telefone_fonte:telFonte,respostas:{...eResps}});
   salvarTudo();
   toast('Registrado: Cota encerrada');
+
+  const _payloadCota = {
+    pesquisa_id: ePesquisa.banco_id ? parseInt(ePesquisa.banco_id) : ePesquisa.id,
+    op_id: sessao.id,
+    status: 5,
+    status_txt: 'COTA ENCERRADA',
+    duracao_seg,
+    telefone: telUsado,
+    telefone_fonte: telFonte,
+    telefone_id: telBancoId,
+    sexo: demo.sexo || null,
+    idade: null,
+    faixa_etaria: demo.faixa_etaria || null,
+    escolaridade: demo.escolaridade || null,
+    renda: null,
+    regiao: demo.regiao || null,
+    outras_dimensoes: { celular: !!demo.celular },
+    respostas: _respostasVarCod,
+    dh: new Date(agora).toISOString()
+  };
+  (async () => {
+    try {
+      if (!window.registrosSb) {
+        if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadCota);
+        return;
+      }
+      const r = await window.registrosSb.criarRegistro(_payloadCota);
+      if (!r.ok) {
+        console.warn('[integridade] cotaEncerrada falhou, indo pra fila:', r.error);
+        if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadCota);
+        if (typeof window._opGravFeedback === 'function') window._opGravFeedback(false);
+      } else {
+        console.log('[integridade] cotaEncerrada → banco id:', r.data?.id);
+        if (typeof window._opGravFeedback === 'function') window._opGravFeedback(true, r.data?.id);
+      }
+    } catch(e) {
+      console.warn('[integridade] erro inesperado em cotaEncerrada, indo pra fila:', e);
+      if (typeof window._pendentesPush === 'function') window._pendentesPush(_payloadCota);
+      if (typeof window._opGravFeedback === 'function') window._opGravFeedback(false);
+    }
+  })();
+
+  // Ligação encerrada com status → libera o próximo número
+  window._telAtual = null;
+  if (typeof window._invalidarCacheBases === 'function') window._invalidarCacheBases();
+  if (typeof window._opCarregarBasesDoBanco === 'function') window._opCarregarBasesDoBanco(true);
   renderOpInicio();
 }
+
+// Feedback visível da gravação no banco (operador sabe se foi gravado ou ficou na fila)
+window._opGravFeedback = function(ok, id) {
+  window._opUltGrav = { ok: !!ok, id: id || null, t: Date.now() };
+  const el = document.getElementById('op-grav-status');
+  if (el) {
+    el.textContent = ok ? ('✓ Gravado no banco #' + (id != null ? id : '')) : '⏳ Sem confirmação do banco — guardado na fila de envio automático';
+    el.style.color = ok ? '#2dc98e' : '#f0b840';
+  }
+  if (typeof toast === 'function') toast(ok ? '✓ Gravado no banco' : '⏳ Guardado na fila de envio (sem conexão com o banco)');
+};
 
 
 // ══════════════════════════════════
@@ -19293,6 +19440,7 @@ function registrarCotaEncerrada() {
 // ══════════════════════════════════
 async function iniciarPausa(tipo, emoji) {
   fechaM('m-pausa');
+  if (window._telAtual) { toast('⚠ Registre o status desta ligação antes de pausar'); return; }
   if (!sessao || !sessao.id) { toast('Sessão inválida'); return; }
   const qid = document.getElementById('op-q-sel')?.value || '';
   const q = DB.pesquisas.find(p => p.id == qid);
