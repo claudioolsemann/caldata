@@ -3730,6 +3730,10 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     </div>
   </div>
   <div class="op-body" id="op-body"></div>
+  <div id="op-acoes-rodape" style="max-width:560px;margin:0 auto 2rem;padding:0 1rem;display:flex;gap:10px">
+    <button id="op-btn-pausa2" onclick="if(!_opBloqueioLigacao('pausar'))abreM('m-pausa')" style="flex:1;padding:12px;border:1.5px solid #f0b840;border-radius:12px;background:#2e3850;color:#f0b840;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">⏸ Pausa</button>
+    <button id="op-btn-sair2" onclick="logout()" style="flex:1;padding:12px;border:1.5px solid #3a4560;border-radius:12px;background:#2e3850;color:#e8eaf0;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">Sair</button>
+  </div>
 </div>
 
 <!-- MODAL LOGIN -->
@@ -3907,7 +3911,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v3-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v4-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -19438,7 +19442,7 @@ function _opBloqueioLigacao(acao) {
 // Indicador visual: Pausa/Sair ficam apagados enquanto há ligação em aberto
 setInterval(() => {
   const aberto = !!window._telAtual;
-  ['op-btn-pausa','op-btn-sair'].forEach(id => {
+  ['op-btn-pausa','op-btn-sair','op-btn-pausa2','op-btn-sair2'].forEach(id => {
     const b = document.getElementById(id);
     if (!b) return;
     b.style.opacity = aberto ? '0.35' : '';
