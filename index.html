@@ -3866,7 +3866,35 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
 // ════════════════════════════════════════
 const LOGO_S = `<svg width="22" height="22" viewBox="0 0 64 64" fill="none"><path d="M32 4C19.85 4 10 13.85 10 26c0 8.28 4.5 15.5 11.2 19.5L32 60l10.8-14.5C49.5 41.5 54 34.28 54 26 54 13.85 44.15 4 32 4z" fill="rgba(255,255,255,.95)"/><circle cx="32" cy="26" r="9" fill="rgba(255,80,0,.35)"/><circle cx="32" cy="26" r="4.5" fill="rgba(255,80,0,.65)"/></svg>`;
 
+// Alias (não enumerável) da resposta pelo id local da pergunta: o banco grava por
+// var_cod (ou p_<id do banco>) e os relatórios leem por p.id. Não altera o que é salvo.
+function _aliasRespostas(arr){
+  try {
+    const ps = (window.DB && Array.isArray(window.DB.pesquisas)) ? window.DB.pesquisas : [];
+    if (!ps.length || !Array.isArray(arr)) return arr;
+    const porId = {};
+    ps.forEach(q => { if (q.banco_id != null) porId[String(q.banco_id)] = q; if (q.id != null) porId[String(q.id)] = porId[String(q.id)] || q; });
+    arr.forEach(r => {
+      if (!r || !r.respostas || typeof r.respostas !== 'object') return;
+      const q = porId[String(r.pesquisa_id)]; if (!q) return;
+      (q.perguntas || []).forEach(p => {
+        if (r.respostas[p.id] !== undefined) return;
+        const k1 = p.var_cod ? String(p.var_cod) : null;
+        const k2 = p.banco_id ? 'p_' + p.banco_id : null;
+        const v = (k1 && r.respostas[k1] !== undefined) ? r.respostas[k1] : ((k2 && r.respostas[k2] !== undefined) ? r.respostas[k2] : undefined);
+        if (v !== undefined) Object.defineProperty(r.respostas, p.id, { value: v, enumerable: false, configurable: true, writable: true });
+      });
+    });
+  } catch(e) { console.warn('[alias-respostas]', e); }
+  return arr;
+}
+window._aliasRespostas = _aliasRespostas;
+
 function loadDB(chave, padrao) {
+  if (chave === 'registros') return _aliasRespostas(_loadDBBase(chave, padrao));
+  return _loadDBBase(chave, padrao);
+}
+function _loadDBBase(chave, padrao) {
   // ─── FASE 4 SUB-1: ao admin navegar, retorna DB.registros (já hidratado do banco) ───
   // A flag _pgUsarRegistrosEmMemoria é setada após hidratação bem-sucedida.
   // Outras chaves (pesquisas, pausas, etc) seguem comportamento normal.
@@ -3907,7 +3935,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v5-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v6-2026-11-24'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -10420,7 +10448,7 @@ function _cntResp(regs,perg,opt){
   return regs.filter(r=>{
     const _rVals = _respVals((r.respostas||{})[perg.id]);
     return _rVals.some(v => {
-      if (isIdade || optEhFaixa) { const norm = normalizarFaixaEtaria(v); if (norm) v = norm; }
+      if (optEhFaixa) { const norm = normalizarFaixaEtaria(v); if (norm) v = norm; }
       return v.toUpperCase() === String(opt).toUpperCase();
     });
   }).length;
@@ -18920,6 +18948,7 @@ function temRespostaOp(p){
 
 function renderOpPerg() {
   const pergs = ePesquisa.perguntas||[];
+  if (!_pergVisivel(ePergIdx)) { const _k = _proxVisivel(ePergIdx); if (_k < 0) { finalizarE(); return; } ePergIdx = _k; }
   const p=pergs[ePergIdx], total=pergs.length, pct=Math.round((ePergIdx+1)/total*100), val=eResps[p.id];
   const abord = ePergIdx===0&&ePesquisa.abordagem ? `<div class="script-box">${ePesquisa.abordagem}</div>` : '';
   let opc='';
@@ -18928,7 +18957,7 @@ function renderOpPerg() {
     opc=`<div class="esc-grid">${[1,2,3,4,5].map(i=>`<button class="esc-btn e${i} ${val==i?'on':''}" onclick="selE('${p.id}',${i})">${i}</button>`).join('')}</div>
     <div class="esc-lb-grid">${lbl.map(l=>`<div class="esc-lb">${l}</div>`).join('')}</div>
     <div class="ns-row"><button class="ns-btn ${val===6?'on':''}" onclick="selE('${p.id}',6)">NÃO SABE</button><button class="ns-btn ${val===7?'on':''}" onclick="selE('${p.id}',7)">NÃO RESPONDEU</button></div>`;
-  } else if(ehPergIdade(p)) {
+  } else if(ehPergIdade(p) && !((p.opts||[]).length >= 2)) {
     opc = htmlFaixasIdade(p.id, val);
   } else if(p.tipo==='aberta') {
     opc=`<textarea id="aberta_${p.id}" rows="3" style="width:100%;padding:10px 12px;border:1.5px solid #3a4560;border-radius:10px;font-size:14px;font-family:inherit;resize:vertical" placeholder="Digite a resposta..." onchange="eResps['${p.id}']=this.value">${val||''}</textarea>`;
@@ -18965,7 +18994,7 @@ function renderOpPerg() {
       <button onclick="confAbandono()" style="padding:8px 14px;border:1.5px solid #e74c3c;border-radius:10px;background:#2e3850;color:#f07070;cursor:pointer;font-size:13px;font-family:inherit;font-weight:700">Abandonou</button>
       <div style="display:flex;gap:8px">
         ${ePergIdx>0?`<button onclick="voltarP()" style="padding:8px 14px;border:1.5px solid #3a4560;border-radius:10px;background:#2e3850;cursor:pointer;font-size:13px;font-family:inherit;font-weight:700;color:#d0d4e0">← Anterior</button>`:''}
-        <button onclick="avancarP()" style="padding:8px 20px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:13px;font-family:inherit;font-weight:800">${ePergIdx===total-1?'✓ Finalizar':'Próxima →'}</button>
+        <button onclick="avancarP()" style="padding:8px 20px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:13px;font-family:inherit;font-weight:800">${_proxVisivel(ePergIdx)<0?'✓ Finalizar':'Próxima →'}</button>
       </div>
     </div>`;
 }
@@ -18977,7 +19006,69 @@ function selMulti(pid,v,checked){
   else { arr = arr.filter(x=>x!==v); }
   eResps[pid] = arr;
 }
-function voltarP(){if(ePergIdx>0){ePergIdx--;renderOpPerg();}}
+// ─── Perguntas derivadas (preenchidas automaticamente, operador não vê) ───
+// Chave = código da pergunta derivada; "de" = código da pergunta de origem.
+const _REGRAS_DERIVADAS = {
+  // Grau de instrução agrupado ← grau de instrução (por posição da opção)
+  '66714': { de: '58909', porIndice: [0, 0, 1, 2] },
+  // Regional ← bairro (Curitiba — Prefeitura/IPPUC)
+  '58144': { de: '58785', mapa: {
+    'AHU':'MATRIZ','ALTO DA GLORIA':'MATRIZ','ALTO DA XV':'MATRIZ','BATEL':'MATRIZ','BIGORRILHO':'MATRIZ','BOM RETIRO':'MATRIZ','CABRAL':'MATRIZ','CENTRO':'MATRIZ','CENTRO CIVICO':'MATRIZ','CRISTO REI':'MATRIZ','HUGO LANGE':'MATRIZ','JARDIM BOTANICO':'MATRIZ','JARDIM SOCIAL':'MATRIZ','JUVEVE':'MATRIZ','MERCES':'MATRIZ','PRADO VELHO':'MATRIZ','REBOUCAS':'MATRIZ','SAO FRANCISCO':'MATRIZ',
+    'ABRANCHES':'BOA VISTA','ATUBA':'BOA VISTA','BACACHERI':'BOA VISTA','BAIRRO ALTO':'BOA VISTA','BARREIRINHA':'BOA VISTA','BOA VISTA':'BOA VISTA','CACHOEIRA':'BOA VISTA','PILARZINHO':'BOA VISTA','SANTA CANDIDA':'BOA VISTA','SAO LOURENCO':'BOA VISTA','TABOAO':'BOA VISTA','VILA TINGUI':'BOA VISTA',
+    'CAJURU':'CAJURU','CAPAO DA IMBUIA':'CAJURU','GUABIROTUBA':'CAJURU','JARDIM DAS AMERICAS':'CAJURU','UBERABA':'CAJURU','TARUMA':'CAJURU',
+    'ALTO BOQUEIRAO':'BOQUEIRAO','BOQUEIRAO':'BOQUEIRAO','VILA HAUER':'BOQUEIRAO','XAXIM':'BOQUEIRAO',
+    'AUGUSTA':'CIC','CIC':'CIC','RIVIERA':'CIC','SAO MIGUEL':'CIC',
+    'AGUA VERDE':'PORTAO','FAZENDINHA':'PORTAO','VILA GUAIRA':'PORTAO','PAROLIN':'PORTAO','PORTAO':'PORTAO','SANTA QUITERIA':'PORTAO','SEMINARIO':'PORTAO','VILA IZABEL':'PORTAO',
+    'CAPAO RASO':'PINHEIRINHO','VILA FANNY':'PINHEIRINHO','VILA LINDOIA':'PINHEIRINHO','NOVO MUNDO':'PINHEIRINHO','PINHEIRINHO':'PINHEIRINHO',
+    'BUTIATUVINHA':'SANTA FELICIDADE','CAMPINA DO SIQUEIRA':'SANTA FELICIDADE','CAMPO COMPRIDO':'SANTA FELICIDADE','CASCATINHA':'SANTA FELICIDADE','LAMENHA PEQUENA':'SANTA FELICIDADE','MOSSUNGUE':'SANTA FELICIDADE','ORLEANS':'SANTA FELICIDADE','SANTA FELICIDADE':'SANTA FELICIDADE','SANTO INACIO':'SANTA FELICIDADE','SAO BRAZ':'SANTA FELICIDADE','SAO JOAO':'SANTA FELICIDADE','VISTA ALEGRE':'SANTA FELICIDADE',
+    'GANCHINHO':'BAIRRO NOVO','SITIO CERCADO':'BAIRRO NOVO','UMBARA':'BAIRRO NOVO',
+    'CAMPO DE SANTANA':'TATUQUARA','CAXIMBA':'TATUQUARA','TATUQUARA':'TATUQUARA'
+  } }
+};
+function _normTxtDer(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/\s+/g,' ').trim(); }
+function _pergPorCod(cod){ return (ePesquisa?.perguntas||[]).find(q => String(q.var_cod||'') === String(cod)); }
+function _ehDerivada(p){ const r = p && p.var_cod ? _REGRAS_DERIVADAS[String(p.var_cod)] : null; return !!(r && _pergPorCod(r.de)); }
+function _valorDerivado(p){
+  const r = _REGRAS_DERIVADAS[String(p.var_cod)]; if (!r) return undefined;
+  const src = _pergPorCod(r.de); if (!src) return undefined;
+  const v = eResps[src.id]; if (v == null || v === '') return undefined;
+  const optsP = p.opts || [];
+  if (r.porIndice) {
+    const i = (src.opts||[]).findIndex(o => _normTxtDer(o) === _normTxtDer(v));
+    const j = i >= 0 ? r.porIndice[i] : -1;
+    return (j != null && j >= 0 && optsP[j] != null) ? optsP[j] : undefined;
+  }
+  if (r.mapa) {
+    const alvo = r.mapa[_normTxtDer(v)]; if (!alvo) return undefined;
+    return optsP.find(o => _normTxtDer(o) === _normTxtDer(alvo));
+  }
+  return undefined;
+}
+// Pulo: "JÁ UTILIZOU ALGUM SERVIÇO…" = NÃO → pula "QUAIS SERVIÇOS" e "AVALIA O ATENDIMENTO" do mesmo bloco
+function _ehPulada(idx){
+  const pergs = ePesquisa?.perguntas || []; const p = pergs[idx];
+  if (!p || !/QUAL OU QUAIS SERVI|AVALIA O ATENDIMENTO/i.test(_normTxtDer(p.txt).replace('SERVICOS','SERVI'))) return false;
+  for (let j = idx - 1; j >= 0 && j >= idx - 3; j--) {
+    const q = pergs[j];
+    if (/J[AÁ] UTILIZOU ALGUM SERVI/i.test(_normTxtDer(q.txt))) return _normTxtDer(eResps[q.id]) === 'NAO';
+    if (/ACESSOU O PORTAL/i.test(_normTxtDer(q.txt))) return false;
+  }
+  return false;
+}
+function _pergVisivel(idx){ const p = (ePesquisa?.perguntas||[])[idx]; return !!p && !_ehDerivada(p) && !_ehPulada(idx); }
+function _proxVisivel(idx){ const n = (ePesquisa?.perguntas||[]).length; for (let k = idx + 1; k < n; k++) if (_pergVisivel(k)) return k; return -1; }
+function _antVisivel(idx){ for (let k = idx - 1; k >= 0; k--) if (_pergVisivel(k)) return k; return -1; }
+// Antes de gravar: calcula derivadas e apaga respostas de perguntas puladas
+function _aplicarDerivadasEPulos(){
+  const pergs = ePesquisa?.perguntas || [];
+  pergs.forEach((p, i) => {
+    if (_ehDerivada(p)) { const v = _valorDerivado(p); if (v !== undefined) eResps[p.id] = v; else delete eResps[p.id]; }
+    else if (_ehPulada(i)) delete eResps[p.id];
+  });
+}
+window._aplicarDerivadasEPulos = _aplicarDerivadasEPulos;
+
+function voltarP(){const k=_antVisivel(ePergIdx);if(k>=0){ePergIdx=k;renderOpPerg();}}
 function avancarP(){
   const pergs=ePesquisa.perguntas||[];
   const p=pergs[ePergIdx];
@@ -19007,7 +19098,8 @@ function avancarP(){
       }
     }
   }
-  if(ePergIdx===pergs.length-1)finalizarE();else{ePergIdx++;renderOpPerg();}
+  const _prox = _proxVisivel(ePergIdx);
+  if(_prox < 0) finalizarE(); else { ePergIdx = _prox; renderOpPerg(); }
 }
 
 function _detectarDemoCampo(p) {
@@ -19097,6 +19189,7 @@ function confAbandono(){
   const duracao_seg = _entrevistaInicio ? Math.round((agora-_entrevistaInicio)/1000) : 0;
   eCont.r++;eCont.t++;
   const q=DB.pesquisas.find(p=>p.id===ePesquisa.id);
+  try { _aplicarDerivadasEPulos(); } catch(_) {}
   // Salva o telefone usado no registro pra rastreio
   const telUsado = window._telAtual?.telefone?.tel || '';
   const telFonte = window._telAtual?._fonte || 'manual';
@@ -19169,6 +19262,7 @@ function confAbandono(){
 
 function finalizarE(){
   if (!_opAutorizado()) return;
+  _aplicarDerivadasEPulos();
   const demo = _coletarDemo();
 
   // ── 4.15: Hidrata registros do banco antes de verificar cotas ──
@@ -19371,6 +19465,7 @@ function iniciarComPerfil(valorSexo, dim) {
 
 function registrarCotaEncerrada() {
   if (!_opAutorizado()) return;
+  try { _aplicarDerivadasEPulos(); } catch(_) {}
   const q = DB.pesquisas.find(p=>p.id===ePesquisa.id);
   const agora = Date.now();
   const duracao_seg = _entrevistaInicio ? Math.round((agora-_entrevistaInicio)/1000) : 0;
@@ -19848,8 +19943,8 @@ function parseQuestionario(texto, nomeArquivo) {
     // Forma 1: "N -TIPO- COD-TEXTO"  (TIPO = O, M, D, U... — qualquer letra)
     // Antes só reconhecia "-O-"; perguntas "-M-"/"-D-" ficavam sem código e com
     // o código grudado no texto. Agora qualquer marcador de tipo é aceito.
-    let m = linha.match(/^(\d{1,3})\s*-[A-Za-z]-\s*(\d+)\s*-\s*(.+)$/);
-    if (m) return { numStr: m[1], num: parseInt(m[1]), var_cod: m[2], txt: m[3].trim() };
+    let m = linha.match(/^(\d{1,3})\s*-([A-Za-z])-\s*(\d+)\s*-\s*(.+)$/);
+    if (m) return { numStr: m[1], num: parseInt(m[1]), var_cod: m[3], txt: m[4].trim(), marcador: m[2].toUpperCase() };
 
     // Forma 2: "N -TEXTO" / "N- TEXTO" / "N - TEXTO" / "N-TEXTO"
     // Aceita: 1, 12, 1A, 2.1, Q1, Q2A, Col1, Col2A
@@ -19881,6 +19976,7 @@ function parseQuestionario(texto, nomeArquivo) {
   let atual = null;
   let maxNumVisto = 0;
   const numStrsVistos = new Set();
+  const codigosVistos = new Set();
   const codigoBase = Date.now();
 
   for (let i = 0; i < linhas.length; i++) {
@@ -19891,12 +19987,19 @@ function parseQuestionario(texto, nomeArquivo) {
       // Aceita se: número base >= max já visto E essa sequência específica nunca apareceu
       // Ex: aceita 1 → 1A → 1B → 2 → 2.1 → 3
       // Rejeita: vir "1 SIM" depois de já ter pergunta #5 (1 < 5, então é opção)
-      const seqOk = tentativa.num >= maxNumVisto && !numStrsVistos.has(tentativa.numStr);
+      // Formato institucional (com código): aceita número repetido no Word (ex.: dois "18")
+      // desde que o CÓDIGO seja novo — o código é a identidade da pergunta.
+      const seqOk = tentativa.marcador
+        ? (tentativa.num >= maxNumVisto && !codigosVistos.has(tentativa.var_cod))
+        : (tentativa.num >= maxNumVisto && !numStrsVistos.has(tentativa.numStr));
       if (seqOk) {
         if (atual) blocos.push(atual);
         atual = { ...tentativa, opts: [] };
         maxNumVisto = Math.max(maxNumVisto, tentativa.num);
         numStrsVistos.add(tentativa.numStr);
+        if (tentativa.var_cod) codigosVistos.add(tentativa.var_cod);
+        // "STATUS DAS LIGAÇÕES" é o resultado da ligação (botões de status), não pergunta
+        if (tentativa.marcador && /^STATUS DAS LIGA/i.test(tentativa.txt)) atual.ignorar = true;
         continue;
       }
     }
@@ -19904,6 +20007,8 @@ function parseQuestionario(texto, nomeArquivo) {
     // Não é pergunta nova — tenta tratar como opção da pergunta atual
     if (atual) {
       const mo = linha.match(/^(\d{1,3})\s+(.+)$/);
+      // Enunciado quebrado em duas linhas no Word: junta ao texto da pergunta
+      if (!mo && atual.marcador && atual.opts.length === 0) { atual.txt = (atual.txt + ' ' + linha).replace(/\s+/g,' ').trim(); continue; }
       if (mo) {
         const txtOpt = mo[2].trim().replace(/[,.]$/,'').replace(/\*/g,'');
         if (txtOpt.length > 0 && txtOpt.length < 150) {
@@ -19913,6 +20018,7 @@ function parseQuestionario(texto, nomeArquivo) {
     }
   }
   if (atual) blocos.push(atual);
+  for (let _bi = blocos.length - 1; _bi >= 0; _bi--) if (blocos[_bi].ignorar) blocos.splice(_bi, 1);
 
   // Converte blocos em estrutura final do questionário (com tipo, demoCampo etc.)
   const perguntas = blocos.map((b, idx) => {
@@ -19964,6 +20070,20 @@ function parseQuestionario(texto, nomeArquivo) {
       else if (/\bRELIGI[ÃA]O\b/i.test(textoP)) demoCampo = 'religiao';
     }
 
+    // Formato institucional: fiel ao Word — -M- = múltipla, -O- = única, opções exatas
+    // (só remove , ? e aspas), enunciado exato com as instruções entre parênteses.
+    if (b.marcador) {
+      const optsWord = opts.map(o => String(o).replace(/[,?"“”]/g,'').replace(/\s+/g,' ').trim()).filter(Boolean);
+      const numStrSanW = numStr.replace(/[^A-Z0-9]/gi,'_');
+      return {
+        id: 'p_'+codigoBase+'_'+numStrSanW+'_'+idx,
+        num: numQ, numStr: numStr, var_cod: varCod,
+        txt: textoP.replace(/\s+/g,' ').trim(),
+        tipo: b.marcador === 'M' ? 'multipla' : 'unica',
+        opts: optsWord, ic: '', cruzavel: optsWord.length >= 2,
+        ...(demoCampo ? {demoCampo} : {})
+      };
+    }
     const cruzavel = tipo === 'escala5' || opts.length >= 2;
     const optsFinais = tipo==='escala5'?[]:tipo==='binaria'?['SIM','NÃO']:tipo==='tendencia'?['MELHOROU','FICOU IGUAL','PIOROU','NÃO SABE']:tipo==='aprovacao'?['APROVA','DESAPROVA','NÃO SABE','NÃO RESPONDEU']:opts;
 
