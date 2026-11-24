@@ -3730,10 +3730,6 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     </div>
   </div>
   <div class="op-body" id="op-body"></div>
-  <div id="op-acoes-rodape" style="max-width:560px;margin:0 auto 2rem;padding:0 1rem;display:flex;gap:10px">
-    <button id="op-btn-pausa2" onclick="if(!_opBloqueioLigacao('pausar'))abreM('m-pausa')" style="flex:1;padding:12px;border:1.5px solid #f0b840;border-radius:12px;background:#2e3850;color:#f0b840;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">⏸ Pausa</button>
-    <button id="op-btn-sair2" onclick="logout()" style="flex:1;padding:12px;border:1.5px solid #3a4560;border-radius:12px;background:#2e3850;color:#e8eaf0;cursor:pointer;font-size:14px;font-family:inherit;font-weight:800">Sair</button>
-  </div>
 </div>
 
 <!-- MODAL LOGIN -->
@@ -3911,7 +3907,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v4-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v5-2026-11-23'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -19105,7 +19101,20 @@ function confAbandono(){
   const telUsado = window._telAtual?.telefone?.tel || '';
   const telFonte = window._telAtual?._fonte || 'manual';
   const telBancoId = window._telAtual?._telBancoId || null;
-  DB.registros.push({id:agora,dh:new Date().toISOString(),op_id:sessao.id,op_nome:sessao.nome,pesquisa_id:ePesquisa.id,pesquisa_nome:q?.nome||'',status:4,status_txt:'ABANDONOU',duracao_seg,telefone:telUsado,telefone_fonte:telFonte,respostas:{}});
+  // Respostas parciais: captura também o texto de pergunta aberta na tela (ainda não confirmado)
+  try {
+    const _pAtual = (ePesquisa?.perguntas || [])[ePergIdx];
+    const _aEl = _pAtual ? document.getElementById('aberta_' + _pAtual.id) : null;
+    if (_pAtual && _aEl && _aEl.value.trim()) eResps[_pAtual.id] = _aEl.value.trim();
+  } catch(_) {}
+  let demoAb = {};
+  try { demoAb = _coletarDemo() || {}; } catch(e) { console.warn('[integridade] _coletarDemo falhou no abandono', e); }
+  const _respostasAb = {};
+  (ePesquisa?.perguntas || []).forEach(p => {
+    const chave = p.var_cod ? String(p.var_cod) : (p.banco_id ? 'p_' + p.banco_id : p.id);
+    if (eResps[p.id] !== undefined && eResps[p.id] !== '') _respostasAb[chave] = eResps[p.id];
+  });
+  DB.registros.push({id:agora,dh:new Date().toISOString(),op_id:sessao.id,op_nome:sessao.nome,pesquisa_id:ePesquisa.id,pesquisa_nome:q?.nome||'',status:4,status_txt:'ABANDONOU',...demoAb,duracao_seg,telefone:telUsado,telefone_fonte:telFonte,respostas:{...eResps}});
   salvarTudo(); toast('Registrado: Abandonou');
 
   // ─── FASE 4 SUB-1: também grava no banco (com fallback offline) ───
@@ -19118,8 +19127,13 @@ function confAbandono(){
     telefone: telUsado,
     telefone_fonte: telFonte,
     telefone_id: telBancoId,
+    sexo: demoAb.sexo || null,
+    faixa_etaria: demoAb.faixa_etaria || null,
+    escolaridade: demoAb.escolaridade || null,
+    regiao: demoAb.regiao || null,
+    outras_dimensoes: { celular: !!demoAb.celular, parcial: true, perguntas_respondidas: Object.keys(_respostasAb).length },
     dh: new Date(agora).toISOString(),
-    respostas: {}
+    respostas: _respostasAb
   };
   (async () => {
     try {
@@ -19442,7 +19456,7 @@ function _opBloqueioLigacao(acao) {
 // Indicador visual: Pausa/Sair ficam apagados enquanto há ligação em aberto
 setInterval(() => {
   const aberto = !!window._telAtual;
-  ['op-btn-pausa','op-btn-sair','op-btn-pausa2','op-btn-sair2'].forEach(id => {
+  ['op-btn-pausa','op-btn-sair'].forEach(id => {
     const b = document.getElementById(id);
     if (!b) return;
     b.style.opacity = aberto ? '0.35' : '';
