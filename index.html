@@ -3296,6 +3296,15 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
   const _HIDRATACAO_TTL_MS = 10000;  // 10 segundos
 
   // Converte um registro vindo do banco pro formato esperado pelo código local
+  // id da pesquisa no banco → id local da mesma pesquisa (iguais na maioria; diferentes em pesquisa importada pelo Word)
+  function _pidLocal(pidBanco) {
+    try {
+      const ps = (window.DB && Array.isArray(window.DB.pesquisas)) ? window.DB.pesquisas : [];
+      const q = ps.find(p => p.banco_id != null && String(p.banco_id) === String(pidBanco));
+      return q ? q.id : pidBanco;
+    } catch (e) { return pidBanco; }
+  }
+  window._pidLocal = _pidLocal;
   function _registroDoBanco(r) {
     return {
       id: r.id,
@@ -3303,7 +3312,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       dh: r.dh,
       op_id: r.op_id,
       op_nome: r.op_nome,
-      pesquisa_id: r.pesquisa_id,
+      pesquisa_id: _pidLocal(r.pesquisa_id),
       pesquisa_nome: r.pesquisa_nome,
       status: r.status,
       status_txt: r.status_txt,
@@ -3337,7 +3346,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       dh: v.dh || p._criado_em,
       op_id: v.op_id,
       op_nome: '',                // não temos no payload, mas não atrapalha
-      pesquisa_id: v.pesquisa_id,
+      pesquisa_id: _pidLocal(v.pesquisa_id),
       pesquisa_nome: '',
       status: v.status,
       status_txt: v.status_txt,
@@ -3940,7 +3949,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v9-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v10-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
