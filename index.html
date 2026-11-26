@@ -3949,7 +3949,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v12-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v13-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4126,6 +4126,7 @@ function ir(t) {
 
 async function logout() {
   if (sessao && sessao.perfil === 'operador' && _opBloqueioLigacao('sair')) return;
+  window._opEntrevistaAtiva = false;
   // Para heartbeat imediatamente
   try { if (typeof window._pararHeartbeat === 'function') window._pararHeartbeat(); } catch(_){}
   // Libera sessão no banco ANTES de redirecionar
@@ -18247,6 +18248,10 @@ async function abrirAbordagemOp(){
 window.abrirAbordagemOp = abrirAbordagemOp;
 
 function renderOpInicio() {
+  if (window._opEntrevistaAtiva) {
+    console.warn('[op] tela inicial bloqueada: entrevista em andamento (atualização em segundo plano ignorada)');
+    return;
+  }
   window._modoCotaCheia = false;
   document.getElementById('op-cnt').textContent = eCont.v+' hoje';
   const pesAtivas = DB.pesquisas.filter(p=>p.ativa);
@@ -19121,6 +19126,7 @@ function temRespostaOp(p){
 }
 
 function renderOpPerg() {
+  window._opEntrevistaAtiva = true;
   const pergs = ePesquisa.perguntas||[];
   if (!_pergVisivel(ePergIdx)) { const _k = _proxVisivel(ePergIdx); if (_k < 0) { finalizarE(); return; } ePergIdx = _k; }
   const p=pergs[ePergIdx], total=pergs.length, pct=Math.round((ePergIdx+1)/total*100), val=eResps[p.id];
@@ -19397,6 +19403,7 @@ function mostrarEncerramentoRegiao(){
 function confAbandono(){
   if (!_opAutorizado()) return;
   if(!confirm('Registrar como "Abandonou a entrevista"?'))return;
+  window._opEntrevistaAtiva = false;
   const agora = Date.now();
   const duracao_seg = _entrevistaInicio ? Math.round((agora-_entrevistaInicio)/1000) : 0;
   eCont.r++;eCont.t++;
@@ -19567,6 +19574,7 @@ function _finalizarComVerif(demo){
   window._telAtual = null;
   // Atualiza contadores das bases do banco
   if (typeof window._invalidarCacheBases === 'function') window._invalidarCacheBases();
+  window._opEntrevistaAtiva = false;
   if (typeof window._opCarregarBasesDoBanco === 'function') {
     window._opCarregarBasesDoBanco(true);
   }
@@ -19678,6 +19686,7 @@ function iniciarComPerfil(valorSexo, dim) {
 
 function registrarCotaEncerrada(_st, _stTxt, _telaFim) {
   if (!_opAutorizado()) return;
+  window._opEntrevistaAtiva = false;
   const _ST  = (typeof _st === 'number') ? _st : 5;
   const _STT = _stTxt || 'COTA ENCERRADA';
   try { _aplicarDerivadasEPulos(); } catch(_) {}
