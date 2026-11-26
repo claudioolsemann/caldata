@@ -3935,7 +3935,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v6-2026-11-24'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v7-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -19044,10 +19044,11 @@ function _valorDerivado(p){
   }
   return undefined;
 }
-// Pulo: "JÁ UTILIZOU ALGUM SERVIÇO…" = NÃO → pula "QUAIS SERVIÇOS" e "AVALIA O ATENDIMENTO" do mesmo bloco
+// Pulo: "JÁ UTILIZOU ALGUM SERVIÇO…" = NÃO → fecha o bloco inteiro da secretaria:
+// "QUAIS SERVIÇOS", "AVALIA O ATENDIMENTO" e "ACESSOU O PORTAL" do mesmo bloco
 function _ehPulada(idx){
   const pergs = ePesquisa?.perguntas || []; const p = pergs[idx];
-  if (!p || !/QUAL OU QUAIS SERVI|AVALIA O ATENDIMENTO/i.test(_normTxtDer(p.txt).replace('SERVICOS','SERVI'))) return false;
+  if (!p || !/QUAL OU QUAIS SERVI|AVALIA O ATENDIMENTO|ACESSOU O PORTAL/i.test(_normTxtDer(p.txt))) return false;
   for (let j = idx - 1; j >= 0 && j >= idx - 3; j--) {
     const q = pergs[j];
     if (/J[AÁ] UTILIZOU ALGUM SERVI/i.test(_normTxtDer(q.txt))) return _normTxtDer(eResps[q.id]) === 'NAO';
