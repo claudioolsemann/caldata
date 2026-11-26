@@ -3874,8 +3874,13 @@ function _aliasRespostas(arr){
     if (!ps.length || !Array.isArray(arr)) return arr;
     const porId = {};
     ps.forEach(q => { if (q.banco_id != null) porId[String(q.banco_id)] = q; if (q.id != null) porId[String(q.id)] = porId[String(q.id)] || q; });
+    const _VCD = { '58910':'sexo', '59062':'faixa_etaria', '58909':'escolaridade' };
     arr.forEach(r => {
       if (!r || !r.respostas || typeof r.respostas !== 'object') return;
+      for (const _k in _VCD) {
+        let _v = r.respostas[_k]; if (Array.isArray(_v)) _v = _v[0];
+        if (_v != null && _v !== '') r[_VCD[_k]] = String(_v);
+      }
       const q = porId[String(r.pesquisa_id)]; if (!q) return;
       (q.perguntas || []).forEach(p => {
         if (r.respostas[p.id] !== undefined) return;
@@ -3935,7 +3940,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v7-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v8-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -8596,12 +8601,17 @@ function _normalizarRegiao(v) {
 }
 
 function _matchCota(valor, item) {
+  if (item === '*') return true; // célula sem esse corte (ex.: 16 a 17 anos sem instrução; pesquisa sem região)
   if (!valor || !item) return false;
   const v = String(valor).toUpperCase().trim();
   const i = String(item).toUpperCase().trim();
   if (!v || !i) return false;
   // Match exato
   if (v === i) return true;
+  // "ATÉ 4ª SÉRIE…" e "DE 5ª A 8ª SÉRIE…" são níveis diferentes (antes os dois viravam "fundamental")
+  const _sv = v.normalize('NFD').replace(/[\u0300-\u036f]/g,''), _si = i.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const _fund = /^(ATE 4|DE 5)/;
+  if (_fund.test(_sv) && _fund.test(_si)) return _sv.slice(0,4) === _si.slice(0,4);
   // Um começa com o outro
   if (v.startsWith(i) || i.startsWith(v)) return true;
   // Normalizar escolaridade
@@ -8628,7 +8638,7 @@ function _ops2ouMaisAtivos() {
 
 function verificarCotas(pesquisaId, demo) {
   const q = DB.pesquisas.find(p => p.id == pesquisaId);
-  if (!q || !q.cotas) return [];
+  if (!q || (!q.cotas && (q.tipoCota || 'marginal') !== 'cruzado')) return [];
   DB.registros = loadDB('registros',[]);
   const validas = DB.registros.filter(r => r.pesquisa_id == pesquisaId && r.status === 1);
   const bloqueadas = [];
@@ -8749,7 +8759,7 @@ function _verificarMatriz4D(q, demo, validas, metaGeral, multi) {
 // Perfis disponíveis para mostrar ao operador
 function perfisDisponiveis(pesquisaId) {
   const q = DB.pesquisas.find(p => p.id == pesquisaId);
-  if (!q || !q.cotas) return [];
+  if (!q || (!q.cotas && (q.tipoCota || 'marginal') !== 'cruzado')) return [];
   const validas = DB.registros.filter(r => r.pesquisa_id == pesquisaId && r.status === 1);
   const metaGeral = q.meta || 0;
   const disponiveis = [];
@@ -8883,6 +8893,10 @@ function _extrairDimensoesCruzada(q) {
 // Garante que q.matriz4D existe e contém todas as combinações das dims atuais.
 // Não destrói metas já preenchidas; só adiciona células faltantes e remove órfãs.
 function _garantirMatriz4D(q) {
+  if (Array.isArray(q.matriz4D) && q.matriz4D.some(c => c && (c.loc === '*' || c.instrucao === '*'))) {
+    const _u = k => [...new Set(q.matriz4D.map(c => c[k]))];
+    return { locs:_u('loc'), sexos:_u('sexo'), idades:_u('idade'), instrucoes:_u('instrucao'), ok:true, faltando:[] };
+  }
   const ext = _extrairDimensoesCruzada(q);
   if (!ext.ok) return ext;
 
@@ -9078,10 +9092,10 @@ function renderCotasCruzadas(q) {
       const argsCel = `'${q.id}','${_escapeAttr(c.loc)}','${_escapeAttr(c.sexo)}','${_escapeAttr(c.idade)}','${_escapeAttr(c.instrucao)}'`;
       return `
         <tr style="border-bottom:1px solid #2e3850">
-          <td style="padding:6px 8px;font-size:11px;color:#c4cad8">${c.loc}</td>
+          <td style="padding:6px 8px;font-size:11px;color:#c4cad8">${c.loc==='*'?'(todas)':c.loc}</td>
           <td style="padding:6px 8px;font-size:11px;color:#c4cad8">${c.sexo}</td>
           <td style="padding:6px 8px;font-size:11px;color:#c4cad8">${c.idade}</td>
-          <td style="padding:6px 8px;font-size:11px;color:#c4cad8">${c.instrucao}</td>
+          <td style="padding:6px 8px;font-size:11px;color:#c4cad8">${c.instrucao==='*'?'(qualquer)':c.instrucao}</td>
           <td style="padding:4px 6px">
             <input type="number" min="0" max="${meta||99999}" value="${c.meta||0}"
               style="width:64px;padding:4px 6px;border:1px solid #3a4560;border-radius:6px;background:#1e2433;color:#f0f2f8;font-size:12px;font-weight:700;font-family:inherit;text-align:right"
@@ -9236,7 +9250,7 @@ function importarPonderacao(input) {
       for (let i = 0; i < Math.min(10, matriz.length); i++) {
         const linha = (matriz[i] || []).map(c => String(c||'').toUpperCase().trim());
         const txt = linha.join('|');
-        if (txt.match(/REGI[ÃA]O|LOCALIZ/) && txt.match(/SEXO/) && txt.match(/IDADE/) && txt.match(/INSTRU|ESCOLAR|GRAU/) && txt.match(/QUANT|META|COTA|PREVISTA|PREVISTO/)) {
+        if (txt.match(/SEXO/) && txt.match(/IDADE/) && txt.match(/INSTRU|ESCOLAR|GRAU/) && txt.match(/QUANT|META|COTA|PREVISTA|PREVISTO/)) {
           headerIdx = i;
           break;
         }
@@ -9255,9 +9269,10 @@ function importarPonderacao(input) {
       const colIns = acharCol(/INSTRU|ESCOLAR|GRAU/);
       const colQtd = acharCol(/QUANT|^META|^COTA|PREVISTA|PREVISTO/);
 
-      if (colReg < 0 || colSex < 0 || colIda < 0 || colIns < 0 || colQtd < 0) {
+      const semRegiao = colReg < 0;
+      if (colSex < 0 || colIda < 0 || colIns < 0 || colQtd < 0) {
         alert('❌ Faltam colunas. Identifiquei:\n' +
-              `  • Região/Localização: ${colReg>=0?'✓ "'+cabec[colReg]+'"':'❌'}\n` +
+              `  • Região/Localização: ${colReg>=0?'✓ "'+cabec[colReg]+'"':'(sem — vale para todas)'}\n` +
               `  • Sexo: ${colSex>=0?'✓ "'+cabec[colSex]+'"':'❌'}\n` +
               `  • Idade: ${colIda>=0?'✓ "'+cabec[colIda]+'"':'❌'}\n` +
               `  • Instrução: ${colIns>=0?'✓ "'+cabec[colIns]+'"':'❌'}\n` +
@@ -9274,29 +9289,66 @@ function importarPonderacao(input) {
       let somaTotal = 0;
       let nulosInstr = 0;
 
+      // Textos da planilha (às vezes cortados) → opção exata do questionário, quando o início bate com UMA opção só
+      const _qImp = DB.pesquisas.find(p => String(p.id) === String(qid));
+      const _nrmI = x => String(x||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ').trim();
+      const _optsCod = cod => { const pp = (_qImp?.perguntas||[]).find(p => String(p.var_cod||'') === cod); return pp ? (pp.opts||[]) : []; };
+      const _resolver = (txt, cod) => {
+        const t = _nrmI(txt); if (!t) return '';
+        const cand = _optsCod(cod).filter(o => _nrmI(o) === t || _nrmI(o).startsWith(t));
+        return cand.length === 1 ? String(cand[0]).toUpperCase().trim() : '';
+      };
+      let resolvidos = 0;
+      const linhasBrutas = [];
+
       for (let i = headerIdx + 1; i < matriz.length; i++) {
         const r = matriz[i];
         if (!r) continue;
-        const loc = String(r[colReg]||'').trim().toUpperCase();
-        const sex = String(r[colSex]||'').trim().toUpperCase();
-        const ida = String(r[colIda]||'').trim().toUpperCase();
+        const loc = semRegiao ? '*' : String(r[colReg]||'').trim().toUpperCase();
+        let sex = String(r[colSex]||'').trim().toUpperCase();
+        let ida = String(r[colIda]||'').trim().toUpperCase();
         let ins = String(r[colIns]||'').trim();
-        const qtd = parseInt(r[colQtd]) || 0;
+        const qtdBruta = parseFloat(String(r[colQtd]).replace(',', '.')) || 0;
 
-        // Pula linhas totalmente vazias
-        if (!loc && !sex && !ida && !ins && !qtd) continue;
+        // Pula linhas totalmente vazias (e a linha da soma, sem categorias)
+        if (!sex && !ida && !ins) continue;
 
         // Pula linhas de nota/legenda
-        if (/^(notas?|observa|total|fonte|aten|como funciona)/i.test(loc)) continue;
+        if (/^(notas?|observa|total|fonte|aten|como funciona)/i.test(semRegiao ? sex : loc)) continue;
 
-        // Instrução vazia → marca pra completar
+        const sexR = _resolver(sex, '58910'); if (sexR) { sex = sexR; resolvidos++; }
+        const idaR = _resolver(ida, '59062'); if (idaR) { ida = idaR; resolvidos++; }
+
+        // Instrução vazia: planilha sem região → vale qualquer instrução ("*"); formato Paraná → como antes
         let insCompleto;
         if (!ins) {
-          insCompleto = '(NÃO ALFABETIZADO/INFANTIL)';
+          insCompleto = semRegiao ? '*' : '(NÃO ALFABETIZADO/INFANTIL)';
           nulosInstr++;
         } else {
-          insCompleto = _completarInstrucaoTruncada(ins);
+          const insR = _resolver(ins, '58909');
+          if (insR) { insCompleto = insR; resolvidos++; } else insCompleto = _completarInstrucaoTruncada(ins);
         }
+        linhasBrutas.push({ loc, sex, ida, insCompleto, qtdBruta });
+      }
+
+      // Quantidades fracionadas → inteiros pelo maior resto, mantendo a soma da planilha
+      const somaBruta = linhasBrutas.reduce((a, l) => a + l.qtdBruta, 0);
+      const temFracao = linhasBrutas.some(l => Math.abs(l.qtdBruta - Math.round(l.qtdBruta)) > 1e-6);
+      const alvoSoma = Math.round(somaBruta);
+      let inteiros = linhasBrutas.map(l => Math.floor(l.qtdBruta + 1e-9));
+      if (temFracao) {
+        let falta = alvoSoma - inteiros.reduce((a, b) => a + b, 0);
+        const ordem = linhasBrutas.map((l, k) => ({ k, resto: l.qtdBruta - Math.floor(l.qtdBruta + 1e-9) }))
+                                  .sort((a, b) => b.resto - a.resto || a.k - b.k);
+        for (let j = 0; j < ordem.length && falta > 0; j++, falta--) inteiros[ordem[j].k]++;
+      } else {
+        inteiros = linhasBrutas.map(l => Math.round(l.qtdBruta));
+      }
+
+      for (let j = 0; j < linhasBrutas.length; j++) {
+        const { loc, sex, ida, insCompleto } = linhasBrutas[j];
+        const qtd = inteiros[j];
+        const ins = insCompleto;
 
         if (loc) setLoc.add(loc);
         if (sex) setSexo.add(sex);
@@ -9306,6 +9358,7 @@ function importarPonderacao(input) {
         linhas.push({ loc, sexo: sex, idade: ida, instrucao: insCompleto, meta: qtd });
         somaTotal += qtd;
       }
+      window._importPonderacaoInfo = { semRegiao, temFracao, somaBruta, resolvidos };
 
       if (linhas.length === 0) {
         toast('❌ Nenhuma linha válida encontrada na planilha');
@@ -9412,12 +9465,17 @@ function _renderPreviewPonderacao() {
             <ul style="margin:0 0 0 18px;padding:0">${liItens(st.instrucoes)}</ul>
           </div>
         </div>
-        ${st.nulosInstr > 0 ? `
+        ${(st.nulosInstr > 0 && !(window._importPonderacaoInfo||{}).semRegiao) ? `
           <div style="margin-top:10px;padding:8px;background:#3a2e1e;border-radius:6px;font-size:11px;color:#f0b840">
             ℹ ${st.nulosInstr} linha(s) sem grau de instrução foram agrupadas em <b>(NÃO ALFABETIZADO/INFANTIL)</b> — típico de jovens 16-17 anos.
           </div>` : ''}
       </div>
 
+      ${(() => { const inf = window._importPonderacaoInfo || {}; const av = [];
+        if (inf.semRegiao) av.push('Planilha sem região: as cotas valem para a cidade toda.');
+        if (inf.temFracao) av.push('A planilha tem frações (soma ' + (Math.round(inf.somaBruta*1000)/1000) + '). Arredondado célula a célula pelo maior resto, fechando ' + st.somaTotal + '.');
+        if (st.nulosInstr > 0 && inf.semRegiao) av.push(st.nulosInstr + ' linha(s) sem instrução (16 a 17 anos): valem para qualquer instrução.');
+        return av.length ? '<div style="background:#1e3a2e;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:#2dc98e;border-left:3px solid #2dc98e">' + av.map(a => 'ℹ ' + a).join('<br>') + '</div>' : ''; })()}
       <div style="background:#252d40;border-radius:8px;padding:12px;margin-bottom:14px;font-size:11px;color:#8b95aa">
         💡 <b>O que acontece ao confirmar:</b><br>
         1. As dimensões atuais da pesquisa serão substituídas pelas categorias acima.<br>
@@ -10395,6 +10453,8 @@ function normalizarFaixaEtaria(val) {
   // Já é uma faixa padrão?
   const faixas = ['16 A 24 ANOS','25 A 34 ANOS','35 A 54 ANOS','55 ANOS OU MAIS'];
   if (faixas.includes(v)) return v;
+  // Faixa escrita no próprio questionário ("16 A 17 ANOS", "18 A 34 ANOS", "55 ANOS OU MAIS"): mantém como está
+  if (/^\d{1,3}\s*A\s*\d{1,3}\s*ANOS$/.test(v) || /^\d{1,3}\s*ANOS OU MAIS$/.test(v)) return v;
   // Tentar converter número de idade
   const f = idadeParaFaixa(v);
   return f || v;
@@ -11514,11 +11574,15 @@ function _resDemoReg(q, reg){
   const demo = { sexo:'', faixa_etaria:'', escolaridade:'', regiao:'' };
   const resp = (reg && reg.respostas) || {};
   const VC = { '58910':'sexo', '59062':'faixa_etaria', '58909':'escolaridade', '67540':'regiao' };
+  const _fixoR = {};
   ((q && q.perguntas) || []).forEach(p=>{
     let c = '';
     if (p && p.demoCampo && demo[p.demoCampo] !== undefined) c = p.demoCampo;
     else if (p && p.var_cod && VC[String(p.var_cod)]) c = VC[String(p.var_cod)];
     if (!c) return;
+    const _ehFixoR = !!(p && p.var_cod && VC[String(p.var_cod)] === c);
+    if (_fixoR[c] && !_ehFixoR) return;
+    if (_ehFixoR) _fixoR[c] = true;
     let val = (p.var_cod != null) ? resp[String(p.var_cod)] : undefined;
     if (val == null || val === '') val = resp[p.id];
     if (val == null || val === '') return;
@@ -18076,6 +18140,7 @@ function renderOpSemRegioes(op, qtdAtribuidas, qFixo) {
 }
 
 function renderOpInicio() {
+  window._modoCotaCheia = false;
   document.getElementById('op-cnt').textContent = eCont.v+' hoje';
   const pesAtivas = DB.pesquisas.filter(p=>p.ativa);
   const op = DB.operadores.find(o => o.id == sessao.id);
@@ -18884,6 +18949,7 @@ function regStatus(cod, txt) {
 
 let _entrevistaInicio = null;
 function iniciarEntrevista() {
+  window._modoCotaCheia = false;
   if (!_opAutorizado()) return;
   const qid = document.getElementById('op-q-sel')?.value;
   if (!qid) { toast('Selecione o questionário'); return; }
@@ -18980,6 +19046,7 @@ function renderOpPerg() {
       </div>
       <div class="pb2"><div class="pb2-f" style="width:${pct}%"></div></div>
     </div>
+    ${(window._modoCotaCheia&&_ehSoCota(p))?`<div class="op-card" style="border:2px solid #f0b840;background:#2e2718;padding:.75rem 1.25rem"><div style="font-size:13px;font-weight:800;color:#f0b840">⚠ COTA DESTE PERFIL JÁ FOI PREENCHIDA</div><div style="font-size:12px;color:#c4cad8;margin-top:4px">Faça esta última pergunta e encerre. A ligação será gravada como <b>COTA ENCERRADA</b>.</div></div>`:''}
     ${abord}
     <div class="op-card">
       <div class="perg-num"><span>Pergunta ${p.num||ePergIdx+1}</span></div>
@@ -18994,7 +19061,7 @@ function renderOpPerg() {
       <button onclick="confAbandono()" style="padding:8px 14px;border:1.5px solid #e74c3c;border-radius:10px;background:#2e3850;color:#f07070;cursor:pointer;font-size:13px;font-family:inherit;font-weight:700">Abandonou</button>
       <div style="display:flex;gap:8px">
         ${ePergIdx>0?`<button onclick="voltarP()" style="padding:8px 14px;border:1.5px solid #3a4560;border-radius:10px;background:#2e3850;cursor:pointer;font-size:13px;font-family:inherit;font-weight:700;color:#d0d4e0">← Anterior</button>`:''}
-        <button onclick="avancarP()" style="padding:8px 20px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:13px;font-family:inherit;font-weight:800">${_proxVisivel(ePergIdx)<0?'✓ Finalizar':'Próxima →'}</button>
+        <button onclick="avancarP()" style="padding:8px 20px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:13px;font-family:inherit;font-weight:800">${(window._modoCotaCheia&&_ehSoCota(p))?'✓ Registrar cota encerrada':(_proxVisivel(ePergIdx)<0?'✓ Finalizar':'Próxima →')}</button>
       </div>
     </div>`;
 }
@@ -19056,7 +19123,22 @@ function _ehPulada(idx){
   }
   return false;
 }
-function _pergVisivel(idx){ const p = (ePesquisa?.perguntas||[])[idx]; return !!p && !_ehDerivada(p) && !_ehPulada(idx); }
+// Pergunta de cortesia: só quando a cota do perfil está cheia (o entrevistado não sai sem pergunta nenhuma)
+const _PERG_SO_COTA = '67391';
+window._modoCotaCheia = false;
+function _ehSoCota(p){ return !!(p && String(p.var_cod||'') === _PERG_SO_COTA); }
+function _irParaPerguntaCota(){
+  const pergs = ePesquisa?.perguntas || [];
+  const k = pergs.findIndex(_ehSoCota);
+  if (k < 0) return false;
+  if (!window._modoCotaCheia) window._cotaVoltarIdx = ePergIdx;
+  window._modoCotaCheia = true;
+  ePergIdx = k;
+  renderOpPerg();
+  return true;
+}
+window._irParaPerguntaCota = _irParaPerguntaCota;
+function _pergVisivel(idx){ const p = (ePesquisa?.perguntas||[])[idx]; return !!p && !_ehDerivada(p) && !_ehPulada(idx) && (!_ehSoCota(p) || window._modoCotaCheia); }
 function _proxVisivel(idx){ const n = (ePesquisa?.perguntas||[]).length; for (let k = idx + 1; k < n; k++) if (_pergVisivel(k)) return k; return -1; }
 function _antVisivel(idx){ for (let k = idx - 1; k >= 0; k--) if (_pergVisivel(k)) return k; return -1; }
 // Antes de gravar: calcula derivadas e apaga respostas de perguntas puladas
@@ -19065,11 +19147,21 @@ function _aplicarDerivadasEPulos(){
   pergs.forEach((p, i) => {
     if (_ehDerivada(p)) { const v = _valorDerivado(p); if (v !== undefined) eResps[p.id] = v; else delete eResps[p.id]; }
     else if (_ehPulada(i)) delete eResps[p.id];
+    else if (_ehSoCota(p) && !window._modoCotaCheia) delete eResps[p.id];
   });
 }
 window._aplicarDerivadasEPulos = _aplicarDerivadasEPulos;
 
-function voltarP(){const k=_antVisivel(ePergIdx);if(k>=0){ePergIdx=k;renderOpPerg();}}
+function voltarP(){
+  const _pv = (ePesquisa?.perguntas||[])[ePergIdx];
+  if (window._modoCotaCheia && _ehSoCota(_pv)) {
+    // volta para onde a cota fechou e sai do modo cota cheia
+    window._modoCotaCheia = false; delete eResps[_pv.id];
+    ePergIdx = (typeof window._cotaVoltarIdx === 'number') ? window._cotaVoltarIdx : 0;
+    renderOpPerg(); return;
+  }
+  const k=_antVisivel(ePergIdx);if(k>=0){ePergIdx=k;renderOpPerg();}
+}
 function avancarP(){
   const pergs=ePesquisa.perguntas||[];
   const p=pergs[ePergIdx];
@@ -19080,6 +19172,8 @@ function avancarP(){
     if(av){av.style.display='block';av.scrollIntoView({behavior:'smooth',block:'center'});}
     return;
   }
+  // Pergunta 52 respondida no modo cota cheia → grava COTA ENCERRADA
+  if (window._modoCotaCheia && _ehSoCota(p)) { registrarCotaEncerrada(); return; }
   // Verificar cotas após responder pergunta de perfil
   const varsCota = ['58910','59062','58909','67540'];
   if(varsCota.includes(p.var_cod) || ehPergIdade(p)) {
@@ -19088,6 +19182,7 @@ function avancarP(){
     if(demo.sexo || demo.faixa_etaria || demo.escolaridade || demo.regiao) {
       const bloq = verificarCotas(ePesquisa.id, demo);
       if(bloq.length > 0) {
+        if (_irParaPerguntaCota()) return; // pesquisa com pergunta de cortesia (52)
         // Verificar se é cota de região (encerramento) ou perfil (redirecionar)
         const ehRegiao = bloq.every(b => b.chave === 'regiao' || b.chave === '__geral__');
         if(ehRegiao) {
@@ -19143,10 +19238,16 @@ function _derivarRegional(val){
 
 function _coletarDemo(){
   const demo={sexo:'',faixa_etaria:'',escolaridade:'',regiao:'',celular:false};
+  const _VCF = { '58910':'sexo', '59062':'faixa_etaria', '58909':'escolaridade', '67540':'regiao' };
+  const _fixo = {};
   (ePesquisa.perguntas||[]).forEach(p=>{
     if(!eResps[p.id]) return;
     const campo = _detectarDemoCampo(p);
     if (!campo) return;
+    // 2ª idade (65725) e escolaridade agrupada (66714) não sobrescrevem a pergunta de código fixo
+    const _ehFixo = _VCF[String(p.var_cod||'')] === campo;
+    if (_fixo[campo] && !_ehFixo) return;
+    if (_ehFixo) _fixo[campo] = true;
     const val = eResps[p.id];
     if (campo === 'faixa_etaria') demo.faixa_etaria = normalizarFaixaEtaria(val) || val;
     else if (campo === 'celular') demo.celular = val === 'SIM';
@@ -19282,6 +19383,7 @@ function _finalizarComVerif(demo){
   // ── Verificação de cotas ──
   const cotasBloqueadas = verificarCotas(ePesquisa.id, demo);
   if (cotasBloqueadas.length > 0) {
+    if (_irParaPerguntaCota()) return; // pesquisa com pergunta de cortesia (52)
     const ehRegiao = cotasBloqueadas.every(b => b.chave === 'regiao' || b.chave === '__geral__');
     if(ehRegiao) { mostrarEncerramentoRegiao(); return; }
     mostrarTelaCotaBloqueada(cotasBloqueadas, demo);
@@ -19467,6 +19569,7 @@ function iniciarComPerfil(valorSexo, dim) {
 function registrarCotaEncerrada() {
   if (!_opAutorizado()) return;
   try { _aplicarDerivadasEPulos(); } catch(_) {}
+  window._modoCotaCheia = false;
   const q = DB.pesquisas.find(p=>p.id===ePesquisa.id);
   const agora = Date.now();
   const duracao_seg = _entrevistaInicio ? Math.round((agora-_entrevistaInicio)/1000) : 0;
