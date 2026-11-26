@@ -3949,7 +3949,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v10-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v11-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -19119,7 +19119,7 @@ function renderOpPerg() {
       <button onclick="confAbandono()" style="padding:8px 14px;border:1.5px solid #e74c3c;border-radius:10px;background:#2e3850;color:#f07070;cursor:pointer;font-size:13px;font-family:inherit;font-weight:700">Abandonou</button>
       <div style="display:flex;gap:8px">
         ${ePergIdx>0?`<button onclick="voltarP()" style="padding:8px 14px;border:1.5px solid #3a4560;border-radius:10px;background:#2e3850;cursor:pointer;font-size:13px;font-family:inherit;font-weight:700;color:#d0d4e0">← Anterior</button>`:''}
-        <button onclick="avancarP()" style="padding:8px 20px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:13px;font-family:inherit;font-weight:800">${(window._modoCotaCheia&&_ehSoCota(p))?'✓ Registrar cota encerrada':(_proxVisivel(ePergIdx)<0?'✓ Finalizar':'Próxima →')}</button>
+        <button onclick="avancarP()" style="padding:8px 20px;border:none;border-radius:10px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:13px;font-family:inherit;font-weight:800">${(window._modoCotaCheia&&_ehSoCota(p))?'✓ Registrar cota encerrada':(p.tipo!=='aberta'&&_ehOutroMunicipio(val))?'✓ Encerrar — outro município':(_proxVisivel(ePergIdx)<0?'✓ Finalizar':'Próxima →')}</button>
       </div>
     </div>`;
 }
@@ -19232,6 +19232,8 @@ function avancarP(){
   }
   // Pergunta 52 respondida no modo cota cheia → grava COTA ENCERRADA
   if (window._modoCotaCheia && _ehSoCota(p)) { registrarCotaEncerrada(); return; }
+  // Bairro = "TELEFONE DE OUTRO MUNICÍPIO" → encerra a ligação como Outro município
+  if (p.tipo !== 'aberta' && _ehOutroMunicipio(eResps[p.id])) { _encerrarOutroMunicipio(); return; }
   // Verificar cotas após responder pergunta de perfil
   const varsCota = ['58910','59062','58909','67540'];
   if(varsCota.includes(p.var_cod) || ehPergIdade(p)) {
@@ -19624,8 +19626,10 @@ function iniciarComPerfil(valorSexo, dim) {
   renderOpPerg();
 }
 
-function registrarCotaEncerrada() {
+function registrarCotaEncerrada(_st, _stTxt, _telaFim) {
   if (!_opAutorizado()) return;
+  const _ST  = (typeof _st === 'number') ? _st : 5;
+  const _STT = _stTxt || 'COTA ENCERRADA';
   try { _aplicarDerivadasEPulos(); } catch(_) {}
   window._modoCotaCheia = false;
   const q = DB.pesquisas.find(p=>p.id===ePesquisa.id);
@@ -19645,15 +19649,15 @@ function registrarCotaEncerrada() {
   });
   DB.registros.push({id:agora,dh:new Date(agora).toISOString(),op_id:sessao.id,op_nome:sessao.nome,
     pesquisa_id:ePesquisa.banco_id ? parseInt(ePesquisa.banco_id) : ePesquisa.id,pesquisa_nome:q?.nome||ePesquisa.nome||'',
-    status:5,status_txt:'COTA ENCERRADA',...demo,duracao_seg,telefone:telUsado,telefone_fonte:telFonte,respostas:{...eResps}});
+    status:_ST,status_txt:_STT,...demo,duracao_seg,telefone:telUsado,telefone_fonte:telFonte,respostas:{...eResps}});
   salvarTudo();
-  toast('Registrado: Cota encerrada');
+  toast('Registrado: ' + (_ST === 5 ? 'Cota encerrada' : _STT));
 
   const _payloadCota = {
     pesquisa_id: ePesquisa.banco_id ? parseInt(ePesquisa.banco_id) : ePesquisa.id,
     op_id: sessao.id,
-    status: 5,
-    status_txt: 'COTA ENCERRADA',
+    status: _ST,
+    status_txt: _STT,
     duracao_seg,
     telefone: telUsado,
     telefone_fonte: telFonte,
@@ -19694,8 +19698,29 @@ function registrarCotaEncerrada() {
   window._telAtual = null;
   if (typeof window._invalidarCacheBases === 'function') window._invalidarCacheBases();
   if (typeof window._opCarregarBasesDoBanco === 'function') window._opCarregarBasesDoBanco(true);
-  renderOpInicio();
+  if (typeof _telaFim === 'function') _telaFim(); else renderOpInicio();
 }
+
+// ─── Bairro "TELEFONE DE OUTRO MUNICÍPIO" → encerra como status 7 (Outro município) ───
+function _ehOutroMunicipio(v){
+  if (Array.isArray(v)) v = v[0];
+  return /OUTRO MUNICIPIO/.test(String(v == null ? '' : v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase());
+}
+function _encerrarOutroMunicipio(){
+  registrarCotaEncerrada(7, 'Outro município', function(){
+    const enc = ePesquisa && ePesquisa.encerramento ? ePesquisa.encerramento : '';
+    document.getElementById('op-body').innerHTML = `
+      <div class="op-card" style="text-align:center;padding:2rem 1.25rem;border:2px solid #60a8e8">
+        <div style="font-size:48px;margin-bottom:10px">📍</div>
+        <div style="font-size:20px;font-weight:800;margin-bottom:6px">Telefone de outro município</div>
+        <p style="color:#c4cad8;font-size:14px;margin-bottom:6px">A pessoa não mora nos bairros da pesquisa. A ligação foi registrada como <b>7. Outro município</b>.</p>
+        <div id="op-grav-status" style="font-size:13px;font-weight:700;color:#8b95aa;margin-bottom:14px">⏳ Enviando ao banco...</div>
+        ${enc ? `<div class="script-box" style="text-align:left;margin-bottom:1.25rem">${enc}</div>` : ''}
+        <button onclick="renderOpInicio()" style="width:100%;padding:15px;border:none;border-radius:12px;background:linear-gradient(135deg,#FF4D00,#FF0066);color:#fff;cursor:pointer;font-size:16px;font-family:inherit;font-weight:800">Nova ligação</button>
+      </div>`;
+  });
+}
+window._encerrarOutroMunicipio = _encerrarOutroMunicipio;
 
 // Bloqueio claro quando há ligação em aberto (mensagem na tela, não só toast)
 function _opBloqueioLigacao(acao) {
