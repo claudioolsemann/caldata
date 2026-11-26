@@ -3949,7 +3949,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v11-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v12-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -5651,11 +5651,44 @@ function pgDash() {
           <button onclick="_dashFiltro7d()" class="btn btn-sm" style="font-size:11px;padding:4px 8px">7 dias</button>
           <button onclick="_dashFiltroTotal()" class="btn btn-sm" style="font-size:11px;padding:4px 8px">Total</button>
         </div>
+        <div style="display:flex;flex-direction:column;gap:4px;padding-top:18px;min-width:150px">
+          <button id="dash-btn-atualizar" onclick="_dashAtualizarBanco(true)" class="btn btn-sm" style="font-size:13px;padding:8px 12px;color:#2dc98e;border-color:#2dc98e;font-weight:800">🔄 Atualizar</button>
+          <div id="dash-ultima-atualiz" style="font-size:10px;color:#8b95aa;text-align:center">automático a cada 15s</div>
+        </div>
       </div>
     </div>
     <div id="dash-body"></div>`;
   renderDash();
+  clearInterval(window._dashBancoTimer);
+  window._dashBancoTimer = setInterval(() => {
+    if (window._tabAtual !== 'dash' || !document.getElementById('dash-q-sel')) { clearInterval(window._dashBancoTimer); return; }
+    if (document.hidden) return;
+    _dashAtualizarBanco(false);
+  }, 15000);
 }
+// Busca as ligações novas no banco e redesenha o painel sem perder os filtros escolhidos
+async function _dashAtualizarBanco(manual){
+  if (window._dashAtualizando) return;
+  window._dashAtualizando = true;
+  const btn = document.getElementById('dash-btn-atualizar');
+  if (btn && manual) { btn.disabled = true; btn.textContent = '⏳ Atualizando…'; }
+  let ok = false;
+  try {
+    if (typeof window._hidratarRegistrosDoBanco === 'function') {
+      const r = await window._hidratarRegistrosDoBanco(true);
+      ok = !!(r && r.ok);
+      if (ok) window._pgUsarRegistrosEmMemoria = true;
+    }
+  } catch(e) { console.warn('[dash] atualizar falhou', e); }
+  finally { window._dashAtualizando = false; }
+  if (window._tabAtual === 'dash' && document.getElementById('dash-q-sel')) renderDash();
+  const lbl = document.getElementById('dash-ultima-atualiz');
+  if (lbl) lbl.textContent = (ok ? 'Atualizado às ' : 'Falhou às ') + new Date().toLocaleTimeString('pt-BR');
+  const b2 = document.getElementById('dash-btn-atualizar');
+  if (b2) { b2.disabled = false; b2.textContent = '🔄 Atualizar'; }
+  if (manual) toast(ok ? '✓ Atualizado do banco' : '⚠ Não foi possível atualizar agora');
+}
+window._dashAtualizarBanco = _dashAtualizarBanco;
 
 function _dashFiltroHoje() {
   const hoje = new Date().toISOString().slice(0,10);
@@ -8817,6 +8850,23 @@ function perfisDisponiveis(pesquisaId) {
 }
 
 // ─── PÁGINA COTAS ───
+async function _cotasAtualizarBanco(btn){
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Atualizando…'; }
+  let ok = false;
+  try {
+    if (typeof window._hidratarRegistrosDoBanco === 'function') {
+      const r = await window._hidratarRegistrosDoBanco(true);
+      ok = !!(r && r.ok);
+      if (ok) window._pgUsarRegistrosEmMemoria = true;
+    }
+  } catch(e) { console.warn('[cotas] atualizar falhou', e); }
+  if (!ok) DB.registros = loadDB('registros', []);
+  DB.pesquisas = loadDB('pesquisas', []);
+  renderCotas();
+  if (btn) { btn.disabled = false; btn.textContent = '🔄 Atualizar'; }
+  toast(ok ? '✓ Atualizado do banco' : '⚠ Banco indisponível — mostrando dados locais');
+}
+window._cotasAtualizarBanco = _cotasAtualizarBanco;
 function pgCotas() {
   const m = document.getElementById('adm-main');
   const todas = _filtrarPesquisasDoSupervisor(DB.pesquisas);
@@ -8836,7 +8886,7 @@ function pgCotas() {
           <label style="margin-top:0;font-size:12px;font-weight:700;color:#c4cad8">Selecionar pesquisa</label>
           <select id="cota-q-sel" onchange="renderCotas()">${qOpts}</select>
         </div>
-        <button class="btn btn-sm" style="margin-bottom:2px" onclick="DB.registros=loadDB('registros',[]);DB.pesquisas=loadDB('pesquisas',[]);renderCotas();toast('✓ Atualizado')">🔄 Atualizar</button>
+        <button class="btn btn-sm" style="margin-bottom:2px" onclick="_cotasAtualizarBanco(this)">🔄 Atualizar</button>
         <button class="btn btn-sm" style="margin-bottom:2px;color:#2dc98e;border-color:#1D9E75" onclick="reprocessarDemoBotao()" title="Preenche campos demográficos vazios (sexo, idade, escolaridade, região) usando as respostas das perguntas">🔧 Reprocessar demografia</button>
         <button class="btn btn-sm" style="margin-bottom:2px;color:#f0b840;border-color:#f0b840" onclick="diagCotasDetalhado()">🔍 Diagnóstico</button>
         <button class="btn btn-sm" style="margin-bottom:2px;color:#e895ff;border-color:#7c3aed" onclick="diagCotasZumbi()">🧟 Zumbi?</button>
