@@ -807,7 +807,30 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
   const SUPABASE_KEY = window.SUPABASE_KEY;
 
   // Cliente global do Supabase (usado por todo o sistema)
-  window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // Segurança: toda chamada leva o login da sessão no cabeçalho x-calldata-token.
+  // O porteiro do banco (SEG_PASSO2) usa isso para saber quem está chamando.
+  function _calldataToken() {
+    try { return window._sessaoToken || localStorage.getItem('call_sessao_token') || ''; } catch (e) { return window._sessaoToken || ''; }
+  }
+  window._calldataFetch = function (url, opts) {
+    opts = opts || {};
+    const h = new Headers(opts.headers || {});
+    const t = _calldataToken();
+    if (t) h.set('x-calldata-token', t);
+    opts.headers = h;
+    return fetch(url, opts).then(function (resp) {
+      if (resp.status === 401 || resp.status === 403) {
+        resp.clone().text().then(function (tx) {
+          if (/CALLDATA_SEM_SESSAO/.test(tx) && (!window._avisoSessaoEm || Date.now() - window._avisoSessaoEm > 60000)) {
+            window._avisoSessaoEm = Date.now();
+            try { toast('⚠ Sua sessão expirou. Saia e entre de novo. As ligações ficam guardadas na fila até lá.'); } catch (e) {}
+          }
+        }).catch(function () {});
+      }
+      return resp;
+    });
+  };
+  window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { global: { fetch: window._calldataFetch } });
   const supabaseClient = window.supabaseClient;
 
   // Função de login que chama a RPC verificar_login no banco.
@@ -934,6 +957,13 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     }
   };
   const loginExclusivoViaSupabase = window.loginExclusivoViaSupabase;
+  // v26: texto do bloqueio por senha errada (5 erros em 15 min → 15 min bloqueado)
+  window._msgLoginBloqueado = function(motivo) {
+    if (!motivo || String(motivo).indexOf('login_bloqueado') !== 0) return null;
+    const seg = parseInt(String(motivo).split(':')[1], 10) || 900;
+    const min = Math.max(1, Math.ceil(seg / 60));
+    return '🔒 Login bloqueado por 5 senhas erradas. Tente de novo em ' + min + ' minuto' + (min === 1 ? '' : 's') + ' ou peça ao administrador para desbloquear.';
+  };
 
   // ═══════════════════════════════════════════════════════════
   //  FASE 4 EXTRA — HEARTBEAT DE SESSÃO
@@ -1123,7 +1153,11 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         sessao_inicio: o.sessao_inicio || null,
         sessao_heartbeat: o.sessao_heartbeat || null,
         sessao_pesquisa_id: o.sessao_pesquisa_id || null,
-        is_ia: o.is_ia === true
+        is_ia: o.is_ia === true,
+        // v26: agente excluído (perfil saiu, histórico fica) e login bloqueado por senha errada
+        excluido: !!o.excluido_em,
+        excluido_em: o.excluido_em || null,
+        login_bloqueado_seg: Number(o.login_bloqueado_seg) || 0
       }));
       // PERSISTE no localStorage também — sem isso, leitores que fazem
       // loadDB('operadores', []) (como _opAutorizado) pegam dados velhos
@@ -1169,6 +1203,37 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
   // Cada método retorna { ok: boolean, data: any, error: string|null }
   // O frontend chama window.pesquisaSb.criarPesquisa(...) e trata o retorno
   // sem precisar conhecer detalhes da API do Supabase.
+  // Trava de cota no banco (MIG 3): diz ao banco quais perguntas são sexo, idade e escolaridade
+  // desta pesquisa. Mesma regra que o sistema usa para gravar as respostas (var_cod, senão p_<id>).
+  window._chavesCotaDaPesquisa = function (q) {
+    const pergs = (q && q.perguntas) || [];
+    const fixos = { sexo: '58910', faixa_etaria: '59062', escolaridade: '58909' };
+    const chave = p => p.var_cod ? String(p.var_cod) : (p.banco_id ? 'p_' + p.banco_id : null);
+    const out = {};
+    ['sexo', 'faixa_etaria', 'escolaridade'].forEach(campo => {
+      let p = pergs.find(x => String(x.var_cod || '') === fixos[campo]);
+      if (!p) p = pergs.find(x => { try { return _detectarDemoCampo(x) === campo; } catch (e) { return false; } });
+      out[campo] = p ? chave(p) : null;
+    });
+    return out;
+  };
+  window._configurarTravaCota = async function (bancoId, q) {
+    try {
+      const qLoc = ((window.DB && DB.pesquisas) || []).find(p => Number(p.banco_id) === Number(bancoId) || Number(p.id) === Number(bancoId));
+      const tipo = (q && q.tipoCota) || (qLoc && qLoc.tipoCota) || '';
+      if (!bancoId || tipo !== 'cruzado') return;
+      const base = (q && Array.isArray(q.perguntas) && q.perguntas.length) ? q : qLoc;
+      const k = window._chavesCotaDaPesquisa(base);
+      // Sem os três códigos não mexe na configuração existente (não desliga a trava por falta de dado)
+      if (!k.sexo || !k.faixa_etaria || !k.escolaridade) { console.warn('[trava de cota] perguntas de perfil não encontradas; configuração mantida', bancoId, k); return; }
+      const { error } = await supabaseClient.rpc('configurar_cota_trava', {
+        p_pesquisa_id: Number(bancoId), p_k_sexo: k.sexo, p_k_idade: k.faixa_etaria, p_k_instrucao: k.escolaridade
+      });
+      if (error) console.warn('[trava de cota] não configurada:', error.message);
+      else console.log('[trava de cota] configurada', bancoId, k);
+    } catch (e) { console.warn('[trava de cota]', e); }
+  };
+
   window.pesquisaSb = {
 
     // ─── PESQUISAS ───
@@ -1190,7 +1255,9 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
           p_usuario_nome:       u.nome
         });
         if (error) return { ok:false, data:null, error: error.message };
-        return { ok:true, data: (data && data[0]) || null, error:null };
+        const _novo = (data && data[0]) || null;
+        if (_novo && _novo.id) window._configurarTravaCota(_novo.id, dados);
+        return { ok:true, data: _novo, error:null };
       } catch (e) {
         return { ok:false, data:null, error: e.message || String(e) };
       }
@@ -1216,6 +1283,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
           p_usuario_nome:       u.nome
         });
         if (error) return { ok:false, data:null, error: error.message };
+        window._configurarTravaCota(id, dados);
         return { ok:true, data, error:null };
       } catch (e) {
         return { ok:false, data:null, error: e.message || String(e) };
@@ -2700,9 +2768,16 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         });
         if (error) {
           if (/registros_client_uuid_uk|CALLDATA_DUPLICADO/i.test(error.message || '')) return { ok:true, data: { id: null, duplicado: true } };
+          // Banco recusou por falta de telefone (cópia de duplo clique de versão antiga): não fica preso na fila
+          if (/CALLDATA_TELEFONE_JA_ENTREVISTADO/.test(error.message || '')) {
+            console.warn('[gravação] telefone já entrevistado nesta pesquisa', params);
+            try { alert('⚠ O banco recusou esta entrevista: o telefone ' + (params.telefone || '') + ' já tem entrevista completa nesta pesquisa.\nEla não foi contada.'); } catch (e) {}
+            return { ok:true, data: { id: null, descartado: true, motivo: 'telefone_ja_entrevistado' } };
+          }
+          if (/CALLDATA_SEM_TELEFONE/.test(error.message || '')) { console.warn('[fila] descartado: ligação sem telefone', params); return { ok:true, data: { id: null, descartado: true } }; }
           // MIG 3: o banco recusou a válida porque a célula (ou a meta geral) encheu antes.
           // Regrava a mesma entrevista como 5 – COTA ENCERRADA, com todas as respostas e a marca excedeu_cota.
-          if (/CALLDATA_COTA_CHEIA/.test(error.message || '') && Number(params.status) === 1 && !params._jaConvertido) {
+          if (/CALLDATA_COTA_CHEIA/.test(error.message || '') && Number(params.status) === 1 && !params._jaConvertido && ((params.outras_dimensoes || {}).origem !== 'ponderacao')) {
             const od = Object.assign({}, params.outras_dimensoes || {}, {
               excedeu_cota: true,
               motivo_cota: String(error.message).replace(/^.*CALLDATA_COTA_CHEIA:\s*/, '').slice(0, 200),
@@ -3156,7 +3231,8 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
           p_op_id:       params.op_id       != null ? params.op_id       : null,
           p_tipo:        params.tipo        || null,
           p_so_ativas:   !!params.so_ativas,
-          p_limit:       params.limit       || 500
+          p_limit:       params.limit       || 500,
+          p_offset:      params.offset      || 0
         });
         if (error) return { ok:false, error: error.message };
         return { ok:true, data: data || [] };
@@ -3519,14 +3595,20 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         const _agora = Date.now();
         const _cache = window._regBancoCache || (window._regBancoCache = new Map());
         const _completo = !window._regBancoUltCompleto || (_agora - window._regBancoUltCompleto) > 60*60*1000 || forcar === 'completo';
+        // Incremental: desde a última atualização bem-sucedida (com 5 min de folga), nunca menos que 20 min.
+        // Antes era fixo "últimos 20 min": entrevistas de outros agentes gravadas no intervalo entre duas
+        // atualizações nunca chegavam e a cota não bloqueava.
+        const _ult = window._regBancoUltSync || _agora;
+        const _desde = Math.min(_agora - 20*60*1000, _ult - 5*60*1000);
         const r = _completo
           ? await window.registrosSb.listarRegistros({ limit: 500000 })
-          : await window.registrosSb.listarRegistros({ data_inicio: new Date(_agora - 20*60*1000).toISOString(), limit: 500000 });
+          : await window.registrosSb.listarRegistros({ data_inicio: new Date(_desde).toISOString(), limit: 500000 });
         if (!r.ok) {
           console.warn('[fase4] hidratação falhou:', r.error);
           return { ok: false, fonte: 'erro', error: r.error };
         }
         if (_completo) { _cache.clear(); window._regBancoUltCompleto = _agora; }
+        window._regBancoUltSync = _agora;
         window._pgUsarRegistrosEmMemoria = true;
         (r.data || []).forEach(x => _cache.set(x.id, x));
         const dosRegistros = Array.from(_cache.values())
@@ -4104,7 +4186,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v23-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'case-v27-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4366,6 +4448,12 @@ async function confirmarLoginOp() {
     erroEl.style.display = 'block';
     return;
   }
+  // v26: login bloqueado por senha errada
+  if (!r.ok && window._msgLoginBloqueado(r.motivo)) {
+    erroEl.textContent = window._msgLoginBloqueado(r.motivo);
+    erroEl.style.display = 'block';
+    return;
+  }
   // Caso 2: senha errada / operador inativo
   if (!r.ok || !r.op) {
     erroEl.textContent = 'Login ou senha incorretos.';
@@ -4468,6 +4556,12 @@ function confirmarLogin() {
       if (!r.ok && r.motivo && r.motivo.startsWith('sessao_ativa_em_outro_pc:')) {
         const inicio = r.sessao_outro_pc_inicio ? new Date(r.sessao_outro_pc_inicio).toLocaleTimeString('pt-BR') : '?';
         document.getElementById('lm-erro').textContent = 'Conta em uso em outro PC desde ' + inicio + '. Aguarde ou peça ao admin para forçar saída.';
+        document.getElementById('lm-erro').style.display = 'block';
+        return;
+      }
+      // v26: login bloqueado por senha errada
+      if (!r.ok && window._msgLoginBloqueado(r.motivo)) {
+        document.getElementById('lm-erro').textContent = window._msgLoginBloqueado(r.motivo);
         document.getElementById('lm-erro').style.display = 'block';
         return;
       }
@@ -4586,8 +4680,15 @@ function confirmarLogin() {
       return;
     }
 
+    // v26: login bloqueado por senha errada
+    if (!r.ok && window._msgLoginBloqueado(r.motivo)) {
+      document.getElementById('lm-erro').textContent = window._msgLoginBloqueado(r.motivo);
+      document.getElementById('lm-erro').style.display = 'block';
+      return;
+    }
     // Caso 2: senha errada / operador inativo
     if (!r.ok || !r.op || !r.op.ativo) {
+      document.getElementById('lm-erro').textContent = 'Login ou senha incorretos.';
       document.getElementById('lm-erro').style.display = 'block';
       document.getElementById('lm-senha').select();
       return;
@@ -5813,6 +5914,7 @@ function pgDash() {
         <div style="display:flex;flex-direction:column;gap:4px;padding-top:18px;min-width:150px">
           <button id="dash-btn-atualizar" onclick="_dashAtualizarBanco(true)" class="btn btn-sm" style="font-size:13px;padding:8px 12px;color:#2dc98e;border-color:#2dc98e;font-weight:800">🔄 Atualizar</button>
           <div id="dash-ultima-atualiz" style="font-size:10px;color:#8b95aa;text-align:center">automático a cada 15s</div>
+          <button onclick="_relatorioFinalPesquisa()" class="btn btn-sm" style="font-size:12px;padding:6px 10px;color:#60a8e8;border-color:#60a8e8;font-weight:800" title="Relatório completo do campo da pesquisa selecionada (abre em nova aba; use Imprimir → Salvar como PDF)">📄 Relatório final</button>
         </div>
       </div>
     </div>
@@ -6002,7 +6104,7 @@ function renderDash() {
   }).join('');
 
   // Produção por operador
-  const opRows = _filtrarOperadoresDoSupervisor(DB.operadores.filter(o=>o.ativo)).map((o,i) => {
+  const opRows = _filtrarOperadoresDoSupervisor(DB.operadores.filter(o=>o.ativo || o.excluido || regs.some(x=>x.op_id===o.id))).map((o,i) => {
     const r   = regs.filter(x=>x.op_id===o.id);
     const v   = r.filter(x=>x.status===1).length;
     const rec = r.filter(x=>_grpDash(x.status)==='r').length;
@@ -6015,7 +6117,7 @@ function renderDash() {
     return `<tr>
       <td><div style="display:flex;align-items:center;gap:8px">
         <div class="av">${o.nome.split(' ').map(n=>n[0]).join('').slice(0,2)}</div>
-        <div><strong>${o.nome}</strong><br><span style="font-size:11px;color:#8b95aa">OP ${i+1}</span></div>
+        <div><strong>${o.nome}</strong>${o.excluido ? ' <span style="font-size:10px;color:#f07070">(excluído)</span>' : (!o.ativo ? ' <span style="font-size:10px;color:#8b95aa">(inativo)</span>' : '')}<br><span style="font-size:11px;color:#8b95aa">OP ${i+1}</span></div>
       </div></td>
       <td><span class="chip ch-g">${v}</span></td>
       <td><span class="chip ch-r">${rec}</span></td>
@@ -6044,7 +6146,216 @@ function renderDash() {
             <thead><tr><th>Operador</th><th>Válidas</th><th>Recusas</th><th>Cota</th><th>Outra cidade</th><th>Não atendidas</th><th>Ligações</th><th>Conversão</th></tr></thead>
             <tbody>${opRows}</tbody></table></div>`
         : '<p style="font-size:13px;color:#8b95aa">Nenhuma ligação no período selecionado.</p>'}
-    </div>`;
+    </div>
+    ${_dashQualidadeHtml(regs)}`;
+}
+
+// ═══ v27 — RELATÓRIO FINAL DA PESQUISA ═══
+// Busca TODAS as ligações da pesquisa no banco (sem as invalidadas e sem as cópias
+// da Ponderação) e monta um relatório para imprimir/salvar em PDF.
+// A célula da cota usa a MESMA regra da trava do banco: 1ª célula da matriz em que
+// sexo, idade e escolaridade batem (texto exato ou '*'), pelas respostas gravadas.
+async function _relatorioFinalPesquisa() {
+  const qid = document.getElementById('dash-q-sel')?.value;
+  if (!qid) { alert('Selecione a pesquisa no Dashboard para gerar o relatório final.'); return; }
+  const q = (DB.pesquisas || []).find(p => String(p.id) === String(qid));
+  if (!q) { alert('Pesquisa não encontrada.'); return; }
+  const w = window.open('', '_blank');
+  if (!w) { alert('O navegador bloqueou a nova aba. Libere pop-ups para este site e clique de novo.'); return; }
+  w.document.write('<p style="font-family:Arial;padding:24px">⏳ Buscando todas as ligações da pesquisa no banco…</p>');
+  try {
+    if (typeof window._hidratarRegistrosDoBanco === 'function') {
+      const r = await window._hidratarRegistrosDoBanco('completo');
+      if (!r || !r.ok) throw new Error('não foi possível buscar as ligações no banco');
+    }
+    w.document.open(); w.document.write(_relatorioFinalHtml(q)); w.document.close();
+  } catch (e) {
+    w.document.open(); w.document.write('<p style="font-family:Arial;padding:24px;color:#b00">⚠ ' + (e.message || e) + '. Nada foi gerado — tente de novo.</p>'); w.document.close();
+  }
+}
+window._relatorioFinalPesquisa = _relatorioFinalPesquisa;
+
+function _relatorioFinalHtml(q) {
+  const esc = v => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const ids = new Set([String(q.id), String(q.banco_id || q.id)]);
+  // Só o que está no banco (pendentes deste PC ainda não gravados ficam fora)
+  const regs = (DB.registros || []).filter(r => ids.has(String(r.pesquisa_id)) && r.origem !== 'ponderacao' && r.dh && r._origem !== 'pendente');
+  const grp = s => _grupoStatus(s);
+  const n = { v:0, r:0, c:0, o:0, n:0 }; regs.forEach(r => n[grp(r.status)]++);
+  const total = regs.length;
+  const pct = (a, b) => b ? (a / b * 100).toFixed(1).replace('.', ',') + '%' : '—';
+  const mmss = (x) => { x = Math.round(x || 0); return Math.floor(x/60) + 'm' + String(x%60).padStart(2,'0') + 's'; };
+  const fmtDH = d => new Date(d).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const ts = regs.map(r => new Date(r.dh).getTime()).sort((a,b) => a-b);
+  const validas = regs.filter(r => Number(r.status) === 1);
+  const MIN = (typeof _CE_MIN_SEG_VALIDA !== 'undefined') ? _CE_MIN_SEG_VALIDA : 120;
+
+  // ── Aderência à cota (regra da trava do banco) ──
+  let cotaHtml = '<p>Esta pesquisa não usa cota cruzada.</p>';
+  const mat = Array.isArray(q.matriz4D) ? q.matriz4D : [];
+  if (q.tipoCota === 'cruzado' && mat.length) {
+    const k = (window._chavesCotaDaPesquisa ? window._chavesCotaDaPesquisa(q) : {});
+    const norm = v => String(Array.isArray(v) ? v[0] : (v == null ? '' : v)).trim().toUpperCase();
+    const bate = (cel, v) => cel === '*' || norm(cel) === norm(v);
+    const celDe = r => { const rp = r.respostas || {};
+      return mat.findIndex(c => bate(c.sexo, rp[k.sexo]) && bate(c.idade, rp[k.faixa_etaria]) && bate(c.instrucao, rp[k.escolaridade])); };
+    const cont = mat.map(() => 0); let fora = 0;
+    validas.forEach(r => { const i = celDe(r); if (i >= 0) cont[i]++; else fora++; });
+    let somaMeta = 0, somaDentro = 0, completas = 0, comMeta = 0;
+    const linhas = mat.map((c, i) => {
+      const meta = Number(c.meta) || 0; if (meta <= 0 && !cont[i]) return '';
+      if (meta > 0) { comMeta++; somaMeta += meta; somaDentro += Math.min(cont[i], meta); if (cont[i] >= meta) completas++; }
+      const dif = cont[i] - meta;
+      const st = meta <= 0 ? 'sem meta' : dif === 0 ? '✓ completa' : dif > 0 ? 'excedeu +' + dif : 'faltam ' + (-dif);
+      const cor = meta <= 0 ? '#666' : dif === 0 ? '#1a7f4b' : dif > 0 ? '#b45309' : '#b00020';
+      return `<tr><td>${esc(c.sexo)}</td><td>${esc(c.idade)}</td><td>${esc(c.instrucao)}</td><td class="n">${meta}</td><td class="n">${cont[i]}</td><td style="color:${cor};font-weight:700">${st}</td></tr>`;
+    }).join('');
+    cotaHtml = `<div class="kp"><div><b>${completas}/${comMeta}</b><span>células completas</span></div>
+      <div><b>${pct(somaDentro, somaMeta)}</b><span>aderência (válidas dentro da meta ÷ meta)</span></div>
+      <div><b>${validas.length - somaDentro - fora}</b><span>válidas acima da meta da célula</span></div>
+      <div><b>${fora}</b><span>válidas fora da matriz</span></div></div>
+      <table><thead><tr><th>Sexo</th><th>Idade</th><th>Escolaridade</th><th>Meta</th><th>Válidas</th><th>Situação</th></tr></thead><tbody>${linhas}</tbody></table>`;
+  }
+
+  // ── Por agente ──
+  const porOp = {}; regs.forEach(r => (porOp[r.op_id] = porOp[r.op_id] || []).push(r));
+  const opLinhas = Object.entries(porOp).map(([id, l]) => {
+    const o = (DB.operadores || []).find(x => String(x.id) === String(id));
+    const c = { v:0, r:0, c:0, o:0, n:0 }; l.forEach(r => c[grp(r.status)]++);
+    const vd = l.filter(r => Number(r.status) === 1 && Number(r.duracao_seg) > 0);
+    const tm = vd.length ? vd.reduce((a, r) => a + Number(r.duracao_seg), 0) / vd.length : 0;
+    const curtas = vd.filter(r => Number(r.duracao_seg) < MIN).length;
+    return { nome: (o && o.nome) || (l[0] && l[0].op_nome) || ('#' + id), excl: !!(o && o.excluido), c, tot: l.length, tm, curtas };
+  }).sort((a, b) => b.c.v - a.c.v);
+  const opHtml = opLinhas.map(x => `<tr><td>${esc(x.nome)}${x.excl ? ' <small>(excluído)</small>' : ''}</td><td class="n">${x.c.v}</td><td class="n">${x.c.r}</td><td class="n">${x.c.c}</td><td class="n">${x.c.o}</td><td class="n">${x.c.n}</td><td class="n">${x.tot}</td><td class="n">${pct(x.c.v, x.tot)}</td><td class="n">${x.c.v ? mmss(x.tm) : '—'}</td><td class="n">${x.curtas}</td></tr>`).join('');
+
+  // ── Por dia ──
+  const porDia = {}; regs.forEach(r => { const d = _diaLocal(r.dh); const e = (porDia[d] = porDia[d] || { t:0, v:0 }); e.t++; if (Number(r.status) === 1) e.v++; });
+  const diaHtml = Object.keys(porDia).sort().map(d => `<tr><td>${d.split('-').reverse().join('/')}</td><td class="n">${porDia[d].t}</td><td class="n">${porDia[d].v}</td><td class="n">${pct(porDia[d].v, porDia[d].t)}</td></tr>`).join('');
+
+  // ── Por status (detalhe) ──
+  const porSt = {}; regs.forEach(r => { const k = r.status + ' — ' + (r.status_txt || ''); porSt[k] = (porSt[k] || 0) + 1; });
+  const stHtml = Object.entries(porSt).sort((a, b) => parseInt(a[0]) - parseInt(b[0])).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="n">${v}</td><td class="n">${pct(v, total)}</td></tr>`).join('');
+
+  const vd = validas.filter(r => Number(r.duracao_seg) > 0);
+  const tmG = vd.length ? vd.reduce((a, r) => a + Number(r.duracao_seg), 0) / vd.length : 0;
+  const ab = regs.filter(r => Number(r.status) === 4).length;
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatório final — ${esc(nomeQ(q))}</title>
+<style>
+ body{font-family:Arial,Helvetica,sans-serif;color:#1d2230;margin:28px;font-size:12px}
+ h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:26px 0 8px;border-bottom:2px solid #1d2230;padding-bottom:4px}
+ .sub{color:#555;margin-bottom:14px} table{border-collapse:collapse;width:100%;margin-top:6px}
+ th,td{border:1px solid #c9ced8;padding:5px 7px;text-align:left} th{background:#eef1f6} td.n{text-align:right;font-variant-numeric:tabular-nums}
+ .kp{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0} .kp div{border:1px solid #c9ced8;border-radius:8px;padding:8px 12px;min-width:120px}
+ .kp b{display:block;font-size:18px} .kp span{color:#555;font-size:11px} .nota{color:#555;font-size:11px;margin-top:6px}
+ .imp{position:fixed;top:12px;right:12px} @media print{.imp{display:none} body{margin:12mm} h2{page-break-after:avoid} tr{page-break-inside:avoid}}
+</style></head><body>
+<button class="imp" onclick="window.print()">🖨 Imprimir / Salvar PDF</button>
+<h1>Relatório final de campo — ${esc(nomeQ(q))}</h1>
+<div class="sub">Gerado em ${fmtDH(Date.now())} · Período de campo: ${ts.length ? fmtDH(ts[0]) + ' a ' + fmtDH(ts[ts.length-1]) : '—'} · Meta: ${q.meta || '—'}</div>
+<h2>1. Resultado do campo</h2>
+<div class="kp">
+ <div><b>${n.v}</b><span>Válidas (entrevista completa)</span></div>
+ <div><b>${q.meta ? pct(n.v, q.meta) : '—'}</b><span>da meta</span></div>
+ <div><b>${n.r}</b><span>Recusas</span></div><div><b>${n.c}</b><span>Cota encerrada</span></div>
+ <div><b>${n.o}</b><span>Outra cidade</span></div><div><b>${n.n}</b><span>Não atendidas</span></div>
+ <div><b>${total}</b><span>Ligações</span></div><div><b>${pct(n.v, total)}</b><span>Conversão</span></div>
+</div>
+<table><thead><tr><th>Status</th><th>Ligações</th><th>%</th></tr></thead><tbody>${stHtml}</tbody></table>
+<h2>2. Aderência à cota</h2>${cotaHtml}
+<h2>3. Qualidade de campo</h2>
+<div class="kp">
+ <div><b>${vd.length ? mmss(tmG) : '—'}</b><span>Tempo médio da válida</span></div>
+ <div><b>${vd.filter(r => Number(r.duracao_seg) < MIN).length}</b><span>Válidas com menos de 2 min</span></div>
+ <div><b>${pct(ab, n.v + ab)}</b><span>Abandono (abandonos ÷ completas + abandonos)</span></div>
+</div>
+<h2>4. Produtividade por agente</h2>
+<table><thead><tr><th>Agente</th><th>Válidas</th><th>Recusas</th><th>Cota</th><th>Outra cidade</th><th>Não atendidas</th><th>Ligações</th><th>Conversão</th><th>Tempo médio</th><th>&lt; 2 min</th></tr></thead><tbody>${opHtml}</tbody></table>
+<h2>5. Por dia</h2>
+<table><thead><tr><th>Dia</th><th>Ligações</th><th>Válidas</th><th>Conversão</th></tr></thead><tbody>${diaHtml}</tbody></table>
+<p class="nota">Fonte: banco de dados CallData, consultado no momento da geração. Não entram as ligações invalidadas nem as cópias criadas pelo módulo de Ponderação. Válida = somente entrevista completa (status 1). Recusas = status 2 e 14; Cota = 5; Outra cidade = 7; Não atendidas = demais status. A célula da cota é identificada pelas respostas de sexo, idade e escolaridade, com a mesma regra da trava do banco.</p>
+</body></html>`;
+}
+
+// ═══ v27 — QUALIDADE DE CAMPO (mesmo filtro de pesquisa e período do Dashboard) ═══
+// Conta só ligações reais (fora as cópias da Ponderação).
+//  • Tempo médio da válida = média de duracao_seg das entrevistas completas (status 1)
+//  • Válidas curtas = completas com menos de 2 min (mesmo limite da Consulta de Entrevista)
+//  • Abandono = status 4 ÷ (completas + abandonos)
+//  • Ligações por hora = ligações ÷ horas em atividade (do 1º ao último registro de cada dia)
+function _dashQualidadeHtml(regsIn) {
+  const regs = (regsIn || []).filter(r => r && r.origem !== 'ponderacao' && r.dh);
+  if (!regs.length) return '';
+  const MIN = (typeof _CE_MIN_SEG_VALIDA !== 'undefined') ? _CE_MIN_SEG_VALIDA : 120;
+  const mmss = (s) => { s = Math.round(s || 0); return Math.floor(s/60) + 'm' + String(s%60).padStart(2,'0') + 's'; };
+  const ehVal = r => Number(r.status) === 1;
+  const ehAb  = r => Number(r.status) === 4;
+  function medidas(lista) {
+    const val = lista.filter(ehVal);
+    const comDur = val.filter(r => Number(r.duracao_seg) > 0);
+    const tm = comDur.length ? comDur.reduce((a, r) => a + Number(r.duracao_seg), 0) / comDur.length : 0;
+    const curtas = comDur.filter(r => Number(r.duracao_seg) < MIN).length;
+    const ab = lista.filter(ehAb).length;
+    const txAb = (val.length + ab) ? Math.round(ab / (val.length + ab) * 100) : 0;
+    // horas em atividade: soma, por dia, do 1º ao último registro
+    const porDia = {};
+    lista.forEach(r => { const d = _diaLocal(r.dh); const t = new Date(r.dh).getTime();
+      if (!porDia[d]) porDia[d] = [t, t]; else { porDia[d][0] = Math.min(porDia[d][0], t); porDia[d][1] = Math.max(porDia[d][1], t); } });
+    const horas = Object.values(porDia).reduce((a, [i, f]) => a + (f - i) / 3600000, 0);
+    const lph = horas >= 0.25 ? (lista.length / horas) : null;
+    return { val: val.length, tm, curtas, ab, txAb, lig: lista.length, lph };
+  }
+  const g = medidas(regs);
+  // por agente
+  const porOp = {};
+  regs.forEach(r => { (porOp[r.op_id] = porOp[r.op_id] || []).push(r); });
+  const linhas = Object.entries(porOp).map(([opId, lista]) => {
+    const o = (DB.operadores || []).find(x => String(x.id) === String(opId));
+    const nome = (o && o.nome) || (lista[0] && lista[0].op_nome) || ('#' + opId);
+    return Object.assign({ nome }, medidas(lista));
+  }).sort((a, b) => b.val - a.val);
+  const corCurtas = (n, v) => !n ? '#8b95aa' : (v && n / v > 0.1 ? '#f07070' : '#f0b840');
+  const rowsOp = linhas.map(x => `<tr>
+      <td>${x.nome}</td>
+      <td style="text-align:center"><span class="chip ch-g">${x.val}</span></td>
+      <td style="text-align:center;font-family:monospace">${x.val ? mmss(x.tm) : '—'}</td>
+      <td style="text-align:center;font-weight:700;color:${corCurtas(x.curtas, x.val)}" title="Entrevistas completas com menos de 2 minutos — conferir na Consulta de Entrevista">${x.curtas ? '⚠ ' + x.curtas : '0'}</td>
+      <td style="text-align:center">${x.ab} <span style="font-size:11px;color:#8b95aa">(${x.txAb}%)</span></td>
+      <td style="text-align:center">${x.lph != null ? x.lph.toFixed(1) : '—'}</td>
+    </tr>`).join('');
+  // por hora do dia
+  const porHora = {};
+  regs.forEach(r => { const h = Number(_horaLocal(r.dh).slice(0, 2)); const k = isNaN(h) ? null : h; if (k == null) return;
+    const e = (porHora[k] = porHora[k] || { lig: 0, val: 0 }); e.lig++; if (ehVal(r)) e.val++; });
+  const horasOrd = Object.keys(porHora).map(Number).sort((a, b) => a - b);
+  const maxLig = Math.max(1, ...horasOrd.map(h => porHora[h].lig));
+  let melhor = null;
+  horasOrd.forEach(h => { const e = porHora[h]; if (e.lig >= 20) { const c = e.val / e.lig; if (!melhor || c > melhor.c) melhor = { h, c }; } });
+  const rowsHora = horasOrd.map(h => { const e = porHora[h]; const conv = e.lig ? Math.round(e.val / e.lig * 100) : 0;
+    return `<tr>
+      <td style="font-family:monospace">${String(h).padStart(2, '0')}h</td>
+      <td><div style="display:flex;align-items:center;gap:6px"><div style="height:10px;background:#378ADD;border-radius:3px;width:${Math.round(e.lig / maxLig * 160)}px"></div><span>${e.lig}</span></div></td>
+      <td style="text-align:center"><span class="chip ch-g">${e.val}</span></td>
+      <td style="text-align:center;font-weight:700;color:${conv >= 30 ? '#2dc98e' : conv >= 15 ? '#f0b840' : '#f07070'}">${conv}%</td>
+    </tr>`; }).join('');
+  return `<div class="card"><div class="card-title">🧭 Qualidade de campo</div>
+    <div class="sg" style="margin-bottom:12px">
+      <div class="sc"><div class="sv" style="font-family:monospace">${g.val ? mmss(g.tm) : '—'}</div><div class="sl">Tempo médio da válida</div></div>
+      <div class="sc"><div class="sv" style="color:${corCurtas(g.curtas, g.val)}">${g.curtas}</div><div class="sl">Válidas com menos de 2 min</div></div>
+      <div class="sc"><div class="sv">${g.txAb}%</div><div class="sl">Taxa de abandono (${g.ab})</div></div>
+      <div class="sc"><div class="sv">${g.lph != null ? g.lph.toFixed(1) : '—'}</div><div class="sl">Ligações por hora</div></div>
+      <div class="sc"><div class="sv">${melhor ? String(melhor.h).padStart(2, '0') + 'h' : '—'}</div><div class="sl">Hora com mais conversão${melhor ? ' (' + Math.round(melhor.c * 100) + '%)' : ''}</div></div>
+    </div>
+    <div style="font-size:12px;font-weight:700;color:#8b95aa;margin:6px 0">Por agente</div>
+    <div style="overflow-x:auto"><table class="tbl">
+      <thead><tr><th>Agente</th><th>Válidas</th><th>Tempo médio</th><th>Válidas &lt; 2 min</th><th>Abandonos</th><th>Ligações/hora</th></tr></thead>
+      <tbody>${rowsOp}</tbody></table></div>
+    <div style="font-size:12px;font-weight:700;color:#8b95aa;margin:14px 0 6px">Por hora do dia</div>
+    <div style="overflow-x:auto"><table class="tbl">
+      <thead><tr><th>Hora</th><th>Ligações</th><th>Válidas</th><th>Conversão</th></tr></thead>
+      <tbody>${rowsHora}</tbody></table></div>
+    <div style="font-size:11px;color:#8b95aa;margin-top:8px">Abandono = abandonos ÷ (completas + abandonos). Ligações por hora = ligações ÷ tempo entre a 1ª e a última ligação de cada dia. A "hora com mais conversão" só considera horas com 20 ligações ou mais.</div>
+  </div>`;
 }
 
 // ─── OPERADORES ───
@@ -6085,7 +6396,7 @@ function pgOperadores() {
 }
 
 function _renderPgOperadores() {
-  const ops = _filtrarOperadoresDoSupervisor(DB.operadores);
+  const ops = _filtrarOperadoresDoSupervisor(DB.operadores).filter(o => !o.excluido);
   const pesAtivas = _filtrarPesquisasDoSupervisor(DB.pesquisas.filter(p=>p.ativa));
 
   // Detecta pesquisas com nome duplicado pra alertar visualmente
@@ -6151,7 +6462,7 @@ function _renderPgOperadores() {
       </div></td>
       <td><strong>OP ${i+1}</strong></td>
       <td>${_chipPerfil}</td>
-      <td><span class="chip ${o.ativo?'ch-g':'ch-r'}">${o.ativo?'Ativo':'Inativo'}</span></td>
+      <td><span class="chip ${o.ativo?'ch-g':'ch-r'}">${o.ativo?'Ativo':'Inativo'}</span>${o.login_bloqueado_seg > 0 ? `<br><span class="chip ch-r" style="font-size:11px;margin-top:4px" title="5 senhas erradas seguidas">🔒 Login bloqueado (${Math.ceil(o.login_bloqueado_seg/60)} min)</span>` : ''}</td>
       <td><span class="chip ${(o.habilitado!==false)?'ch-b':'ch-x'}" style="font-size:11px">${(o.habilitado!==false)?'OK':'Bloqueado'}</span></td>
       <td>${sessaoChip}</td>
       <td>${(() => {
@@ -6184,6 +6495,7 @@ function _renderPgOperadores() {
         ${btnToggle}
         ${btnExcluir}
         ${btnForcarSaida}
+        ${(o.login_bloqueado_seg > 0 && _ehAdmin()) ? `<button class="btn btn-sm btn-s" onclick="desbloquearLoginOp('${o.id}')" title="Libera o login agora, sem esperar os 15 minutos">🔓 Desbloquear login</button>` : ''}
       </td>
     </tr>`;
   }).join('');
@@ -6429,7 +6741,7 @@ function excluirOp(id) {
     toast('Apenas o Admin Master pode excluir outros administradores.');
     return;
   }
-  confirmarAcao('Excluir <strong>'+op.nome+'</strong>?<br><small style="color:#8b95aa">Os registros (ligações) serão mantidos no banco.</small>', async () => {
+  confirmarAcao('Excluir <strong>'+op.nome+'</strong>?<br><small style="color:#8b95aa">O perfil sai do sistema: não entra mais e o login fica livre. Todo o histórico (entrevistas, ligações e pausas) continua, com o nome dele.</small>', async () => {
     const { error } = await supabaseClient.rpc('excluir_operador', {
       p_id: parseInt(id)
     });
@@ -6439,10 +6751,23 @@ function excluirOp(id) {
       console.error(error);
       return;
     }
-    toast('Operador excluído');
+    toast('Operador excluído (histórico mantido)');
     pgOperadores();
   });
 }
+
+// v26 — Admin libera um login bloqueado por senha errada
+async function desbloquearLoginOp(id) {
+  if (!_exigirAdmin('desbloquear login')) return;
+  const op = DB.operadores.find(o => o.id == id);
+  if (!op) return;
+  const { error } = await supabaseClient.rpc('desbloquear_login', { p_login: op.login });
+  if (error) { toast('❌ ' + (error.message || 'Erro ao desbloquear')); return; }
+  toast('🔓 Login de ' + op.nome + ' liberado');
+  await sincronizarOperadoresDoBanco();
+  _renderPgOperadores();
+}
+window.desbloquearLoginOp = desbloquearLoginOp;
 
 // ─── FASE 4 EXTRA: Admin força saída de operador ───
 // Encerra a sessão ativa do operador em qualquer PC. O heartbeat detecta
@@ -12774,6 +13099,30 @@ async function confirmarImportTel() {
     if (elEta && eta) elEta.textContent = eta;
   };
 
+  // 2. Prepara array de telefones pro bulk insert
+  const validos = p.celulares.length ? p.celulares : p.fixos;
+
+  // v26 — Blacklist conferida ANTES de criar a base, em blocos de 1.000
+  // (o servidor devolve no máximo 1.000 linhas por consulta). Se a conferência
+  // falhar, a importação PARA: nenhum número entra sem passar pela blacklist.
+  setProgress(`🚫 Verificando blacklist...`, 0, `0 de ${validos.length.toLocaleString()}`, 'consultando...');
+  const VBL_CHUNK = 1000;
+  const blacklistedSet = new Set();
+  const blPodeFalhar = false;
+  for (let i = 0; i < validos.length; i += VBL_CHUNK) {
+    const slice = validos.slice(i, i + VBL_CHUNK).map(t => t.tel);
+    const rbl = await window.blacklistSb.verificarLote(slice);
+    if (!rbl.ok) {
+      console.warn('[importação] Falha ao verificar blacklist:', rbl.error);
+      btnList.forEach(b => b.disabled = false);
+      const elProgBl = document.getElementById('imp-progress'); if (elProgBl) elProgBl.remove();
+      return alert('❌ Não foi possível conferir a blacklist, então a base NÃO foi importada.\n\nNada foi gravado. Tente de novo em instantes.\n\nDetalhe: ' + (rbl.error || 'erro desconhecido'));
+    }
+    rbl.data.bloqueados.forEach(t => blacklistedSet.add(t));
+    const pct = ((i + slice.length) / validos.length) * 100;
+    setProgress(`🚫 Verificando blacklist...`, pct, `${(i+slice.length).toLocaleString()} de ${validos.length.toLocaleString()}`, '');
+  }
+
   // 1. Cria base vazia no banco
   const r1 = await window.basesSb.criarBase({
     pesquisa_id: pesqId,
@@ -12789,28 +13138,6 @@ async function confirmarImportTel() {
     return alert('❌ Falhou ao criar base no banco:\n\n' + r1.error);
   }
   const baseId = r1.data.id;
-
-  // 2. Prepara array de telefones pro bulk insert
-  const validos = p.celulares.length ? p.celulares : p.fixos;
-
-  // ⚠ PATCH 4 — Verifica blacklist em chunks ANTES de preparar inserção
-  setProgress(`🚫 Verificando blacklist...`, 0, `0 de ${validos.length.toLocaleString()}`, 'consultando...');
-  const VBL_CHUNK = 5000;
-  const blacklistedSet = new Set();
-  let blPodeFalhar = false;
-  for (let i = 0; i < validos.length; i += VBL_CHUNK) {
-    const slice = validos.slice(i, i + VBL_CHUNK).map(t => t.tel);
-    const rbl = await window.blacklistSb.verificarLote(slice);
-    if (!rbl.ok) {
-      // Se falhou (ex: RPC não criada ainda), avisa mas segue sem bloquear
-      console.warn('[importação] Falha ao verificar blacklist:', rbl.error);
-      blPodeFalhar = true;
-      break;
-    }
-    rbl.data.bloqueados.forEach(t => blacklistedSet.add(t));
-    const pct = ((i + slice.length) / validos.length) * 100;
-    setProgress(`🚫 Verificando blacklist...`, pct, `${(i+slice.length).toLocaleString()} de ${validos.length.toLocaleString()}`, '');
-  }
 
   // Separa: limpos vs bloqueados pela blacklist
   const limpos     = validos.filter(t => !blacklistedSet.has(t.tel));
@@ -14556,7 +14883,7 @@ window._hidratarPausasDoAdmin = async function(opts) {
 
     var r = await window.pausasSb.listarGeral({
       data_ini: dataIni,
-      limit: 2000
+      limit: 1000
     });
     if (!r.ok) {
       console.warn('[fase4-sub3] Falha ao hidratar pausas (admin):', r.error);
@@ -15532,7 +15859,15 @@ function aplicarPonderacao(qid) {
 
   if (!total || total <= N) { toast('Informe um total maior que as entrevistas reais ('+N+')'); return; }
 
-  const qtdAdicionar = total - N - DB.registros.filter(r=>_matchQid(r)&&r.status===1&&r.origem==='ponderacao').length;
+  // v27 — causa do "1000 virou 1216": uma segunda aplicação criava de novo
+  // (total − reais) registros, somando aos ponderados que já estavam no banco.
+  // Agora: se já existe ponderação gravada, é preciso excluí-la antes.
+  const jaPonderados = DB.registros.filter(r=>_matchQid(r)&&r.status===1&&r.origem==='ponderacao').length;
+  if (jaPonderados > 0) {
+    alert(`⚠ Esta pesquisa já tem ${jaPonderados} registros de ponderação no banco (total atual ${N + jaPonderados}).\n\nExclua a ponderação existente antes de aplicar outra — senão o total passa do desejado.`);
+    return;
+  }
+  if (window._pondAplicando) { toast('⏳ Ponderação em andamento — aguarde terminar'); return; }
   if (!confirm(`Aplicar "${nome}"?\n${N} reais → ${total} total\nSerão criados ${total-N} registros de ponderação (método: ${metodo}).`)) return;
 
   const novos = [];
@@ -15596,19 +15931,18 @@ function aplicarPonderacao(qid) {
     });
   }
 
-  DB.registros.push(...novos);
   if (!q.ponderacoes) q.ponderacoes = [];
   q.ponderacoes.push({ nome, dh:new Date().toISOString(),
     total:N+novos.length, n_reais:N, registros:novos.length, metodo });
   q.meta_ponderada = N + novos.length;
   salvarTudo();
-  toast(`✓ Ponderação aplicada! ${novos.length} registros criados.`);
-  // Recarrega do banco para limpar estado local e evitar dupla contagem
-  _pondCarregarRegistros();
 
-  // ─── Salvar registros de ponderação no banco ───
-  // Sem isso, a hidratação sobrescreve o localStorage e os registros somem.
+  // ─── v27: grava no banco um por um e SÓ DEPOIS recarrega (antes recarregava
+  // no meio da gravação e a tela mostrava total errado) ───
+  if (!window.registrosSb) { toast('⚠ Banco offline — ponderação não gravada'); return; }
   if (window.registrosSb && novos.length > 0) {
+    window._pondAplicando = true;
+    toast(`⏳ Gravando ${novos.length} registros de ponderação no banco…`);
     const qObj = DB.pesquisas.find(x => x.id == qid);
     const perguntas = qObj?.perguntas || [];
     (async () => {
@@ -15645,10 +15979,13 @@ function aplicarPonderacao(qid) {
           dh: reg.dh || new Date().toISOString()
         };
         const r = await window.registrosSb.criarRegistro(payload);
-        if (r.ok) ok++; else { falha++; console.warn('[pond] falha ao salvar reg:', r.error); }
+        if (r.ok && r.data && r.data.id && !r.data.convertidoCota && !r.data.descartado && !r.data.duplicado) ok++; else { falha++; console.warn('[pond] falha ao salvar reg:', r.error || r.data); }
       }
+      window._pondAplicando = false;
       console.log(`[pond] ${ok} registros salvos no banco, ${falha} falhas`);
-      if (ok > 0) toast(`✓ ${ok} registros de ponderação sincronizados com o banco`);
+      if (falha) alert(`⚠ Ponderação: ${ok} gravados e ${falha} com falha.\nConfira o total na tela; se estiver errado, exclua a ponderação e aplique de novo.`);
+      else toast(`✓ Ponderação aplicada: ${ok} registros gravados no banco`);
+      await _pondCarregarRegistros();
     })();
   }
 }
@@ -15658,7 +15995,8 @@ function excluirPonderacao(qid, idx) {
   if (!q || !q.ponderacoes) return;
   const p = q.ponderacoes[idx];
   if (!confirm(`Excluir ponderação "${p.nome}"?\nIsso removerá os ${p.registros} registros criados.`)) return;
-  DB.registros = DB.registros.filter(r => !(r.pesquisa_id==qid && r.origem==='ponderacao' && r.ponderacao_nome===p.nome));
+  const _qidBancoEx = q.banco_id ? parseInt(q.banco_id) : parseInt(qid);
+  DB.registros = DB.registros.filter(r => !((r.pesquisa_id==qid || r.pesquisa_id==_qidBancoEx) && r.origem==='ponderacao' && r.ponderacao_nome===p.nome));
   q.ponderacoes.splice(idx,1);
   if (!q.ponderacoes.length) delete q.meta_ponderada;
   salvarTudo();
@@ -15669,10 +16007,11 @@ function excluirPonderacao(qid, idx) {
   if (window.registrosSb) {
     (async () => {
       try {
-        const r = await window.registrosSb.deletarPorPonderacao(qid, p.nome);
-        if (r?.ok) console.log('[pond] registros removidos do banco:', p.nome);
-        else console.warn('[pond] falha ao remover do banco:', r?.error);
+        const r = await window.registrosSb.deletarPorPonderacao(_qidBancoEx, p.nome);
+        if (r?.ok) { console.log('[pond] registros removidos do banco:', p.nome); toast('✓ Registros da ponderação removidos do banco'); }
+        else { console.warn('[pond] falha ao remover do banco:', r?.error); alert('⚠ Não foi possível remover os registros da ponderação no banco: ' + (r?.error || 'erro')); }
       } catch(e) { console.warn('[pond] erro ao remover do banco:', e); }
+      await _pondCarregarRegistros();
     })();
   }
 }
@@ -16354,7 +16693,7 @@ function pgConsultaEntrevista() {
   const _ceQOpts = '<option value="">Todas as pesquisas permitidas</option>' +
     _ceQs.map(q => `<option value="${q.id}">${_escHtmlICR(nomeQ(q))}</option>`).join('');
   const _ops = (DB.operadores || []).filter(o => o && !o.is_ia).slice().sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || '')));
-  const _opOpts = '<option value="">Todos os agentes</option>' + _ops.map(o => `<option value="${o.id}">${_escHtmlICR(o.nome || ('#' + o.id))}</option>`).join('');
+  const _opOpts = '<option value="">Todos os agentes</option>' + _ops.map(o => `<option value="${o.id}">${_escHtmlICR(o.nome || ('#' + o.id))}${o.excluido ? ' (excluído)' : ''}</option>`).join('');
   const _hoje = _diaLocal(new Date());
   document.getElementById('adm-main').innerHTML = `
     <div class="card">
@@ -18192,6 +18531,7 @@ async function iniciarPainelOp() {
       if (g==='v') eCont.v++; else if (g==='r') eCont.r++; else if (g==='c') eCont.c++; else if (g==='o') eCont.o++; else eCont.s++;
     });
   } catch(e) { console.warn('[op] contagem do dia', e); }
+  try { _opIniciarAtualizacaoAuto(); } catch (e) {}
 
   // ─── FASE 4 SUB-3 ETAPA 4 — CROSS-PC: restaura pausa ativa do banco ───
   // Cenário: operador iniciou pausa no PC1, fechou aba/desligou, agora abriu o
@@ -19271,6 +19611,7 @@ function copiarTel(tel) {
 let _ultimoReg = Date.now();
 function regStatus(cod, txt) {
   if (!_opAutorizado()) return;
+  if (_cliqueRepetido('status')) return;
   const qid = document.getElementById('op-q-sel')?.value;
   if (!qid) { toast('Selecione o questionário'); return; }
   // Telefone obrigatório — não dá pra registrar status sem telefone definido
@@ -19399,6 +19740,18 @@ function iniciarEntrevista() {
     const ops5min = DB.operadores.filter(o => o.ultimoLogin && (agoraMs - new Date(o.ultimoLogin).getTime()) < 5*60*1000);
     if (ops5min.length < 2) {
       mostrarEncerramentoRegiao();
+      return;
+    }
+  }
+  // O mesmo telefone não pode ter duas entrevistas completas na mesma pesquisa
+  {
+    const _tel = String(window._telAtual?.telefone?.tel || '').replace(/\D/g, '');
+    const _ja = _tel && (DB.registros || []).find(r => r && r.status === 1 && !r.deletado_em &&
+      (r.pesquisa_id == ePesquisa.id || r.pesquisa_id == ePesquisa.banco_id) && String(r.telefone || '').replace(/\D/g, '') === _tel);
+    if (_ja) {
+      alert('⚠ Este telefone já tem uma entrevista completa nesta pesquisa' + (_ja.op_nome ? ' (agente ' + _ja.op_nome + ')' : '') +
+            '.\n\nNão faça a entrevista de novo. Registre o resultado desta ligação pelos botões de status ou sorteie outro número.');
+      ePesquisa = null;
       return;
     }
   }
@@ -19574,6 +19927,43 @@ function voltarP(){
   }
   const k=_antVisivel(ePergIdx);if(k>=0){ePergIdx=k;renderOpPerg();}
 }
+// Faixa de idade em números: "16 A 17 ANOS" → [16,17]; "55 ANOS OU MAIS" → [55,200]; "ATÉ 24" → [0,24]
+function _faixaIdade(txt) {
+  const t = String(txt || '').toUpperCase();
+  const n = (t.match(/\d+/g) || []).map(Number);
+  if (!n.length) return null;
+  if (/OU MAIS|MAIS DE|ACIMA/.test(t)) return [n[0], 200];
+  if (/^\s*(AT[ÉE]|MENOS DE|ABAIXO)/.test(t)) return [0, n[0]];
+  if (n.length >= 2) return [Math.min(n[0], n[1]), Math.max(n[0], n[1])];
+  return [n[0], n[0]];
+}
+// Devolve {atual, outra, permitidas} se a idade desta pergunta não combina com outra pergunta de idade já respondida
+function _idadeConflitante(p) {
+  try {
+    if (!p || p.tipo === 'aberta' || !ehPergIdade(p)) return null;
+    const fx = _faixaIdade(eResps[p.id]);
+    if (!fx) return null;
+    for (const o of (ePesquisa.perguntas || [])) {
+      if (o === p || !ehPergIdade(o) || o.tipo === 'aberta' || eResps[o.id] == null || eResps[o.id] === '') continue;
+      const fo = _faixaIdade(eResps[o.id]);
+      if (!fo) continue;
+      if (fx[0] > fo[1] || fx[1] < fo[0]) {
+        const permitidas = (p.opts || []).filter(op => { const f = _faixaIdade(op); return f && !(f[0] > fo[1] || f[1] < fo[0]); });
+        return { atual: eResps[p.id], outra: o, outraResp: eResps[o.id], permitidas };
+      }
+    }
+  } catch (e) { console.warn('[idade]', e); }
+  return null;
+}
+function _avisoIdade(c) {
+  const msg = '⚠ IDADE NÃO BATE\n\nNesta pergunta foi marcado: ' + c.atual +
+    '\nNa pergunta ' + (c.outra.num || '') + (c.outra.var_cod ? ' (' + c.outra.var_cod + ')' : '') + ' foi marcado: ' + c.outraResp +
+    '\n\nOpções que combinam: ' + (c.permitidas.length ? c.permitidas.join(' · ') : '(nenhuma — volte e confirme a idade)') +
+    '\n\nConfirme a idade com o entrevistado e marque a opção certa.';
+  alert(msg);
+}
+window._idadeConflitante = _idadeConflitante;
+
 function avancarP(){
   const pergs=ePesquisa.perguntas||[];
   const p=pergs[ePergIdx];
@@ -19584,6 +19974,8 @@ function avancarP(){
     if(av){av.style.display='block';av.scrollIntoView({behavior:'smooth',block:'center'});}
     return;
   }
+  // Perguntas de idade têm que bater entre si (ex.: 59062 = 35 A 54 não combina com 65725 = 55 OU MAIS)
+  { const _conf = _idadeConflitante(p); if (_conf) { _avisoIdade(_conf); return; } }
   // Pergunta 52 respondida no modo cota cheia → grava COTA ENCERRADA
   if (window._modoCotaCheia && _ehSoCota(p)) { registrarCotaEncerrada(); return; }
   // Bairro = "TELEFONE DE OUTRO MUNICÍPIO" → encerra a ligação como Outro município
@@ -19777,8 +20169,32 @@ function confAbandono(){
   renderOpInicio();
 }
 
+function _opIniciarAtualizacaoAuto() {
+  if (window._opAtualizaTimer) clearInterval(window._opAtualizaTimer);
+  window._opAtualizaTimer = setInterval(() => {
+    try {
+      if (!sessao || sessao.perfil !== 'operador') { clearInterval(window._opAtualizaTimer); window._opAtualizaTimer = null; return; }
+      if (document.hidden) return;
+      if (typeof window._hidratarRegistrosDoBanco === 'function') window._hidratarRegistrosDoBanco(true).catch(() => {});
+    } catch (e) {}
+  }, 60000);
+}
+window._opIniciarAtualizacaoAuto = _opIniciarAtualizacaoAuto;
+
+// Ignora a mesma ação repetida em menos de 3 s (duplo clique / Enter repetido)
+function _cliqueRepetido(acao) {
+  const agora = Date.now();
+  window._ultCliqueAcao = window._ultCliqueAcao || {};
+  const ult = window._ultCliqueAcao[acao] || 0;
+  if (agora - ult < 3000) { console.warn('[clique repetido ignorado]', acao); return true; }
+  window._ultCliqueAcao[acao] = agora;
+  return false;
+}
+window._cliqueRepetido = _cliqueRepetido;
+
 function finalizarE(){
   if (!_opAutorizado()) return;
+  if (_cliqueRepetido('finalizar')) return;
   _aplicarDerivadasEPulos();
   const demo = _coletarDemo();
 
@@ -19809,6 +20225,7 @@ function _finalizarComVerif(demo){
   const duracao_seg = _entrevistaInicio ? Math.round((agora-_entrevistaInicio)/1000) : 0;
   // Salva o telefone usado no registro pra rastreio
   const telUsado = window._telAtual?.telefone?.tel || '';
+  if (!telUsado) { console.warn('[integridade] finalizar sem telefone ignorado (segunda chamada ou ligação já encerrada)'); return; }
   const telFonte = window._telAtual?._fonte || 'manual';
   const telBancoId = window._telAtual?._telBancoId || null;
   DB.registros.push({id:agora,dh:new Date().toISOString(),op_id:sessao.id,op_nome:sessao.nome,pesquisa_id:ePesquisa.id,pesquisa_nome:ePesquisa.nome,status:1,status_txt:'BEM SUCEDIDA',...demo,duracao_seg,telefone:telUsado,telefone_fonte:telFonte,respostas:{...eResps}});
@@ -19993,6 +20410,8 @@ function iniciarComPerfil(valorSexo, dim) {
 
 function registrarCotaEncerrada(_st, _stTxt, _telaFim) {
   if (!_opAutorizado()) return;
+  if (_cliqueRepetido('cota_encerrada')) return;
+  if (!(window._telAtual && window._telAtual.telefone && window._telAtual.telefone.tel)) { console.warn('[integridade] encerramento sem telefone ignorado'); return; }
   window._opEntrevistaAtiva = false;
   const _ST  = (typeof _st === 'number') ? _st : 5;
   const _STT = _stTxt || 'COTA ENCERRADA';
@@ -22296,32 +22715,83 @@ function _agenteIANovoModal() {
 function pgPausas() {
   clearInterval(pausasTimerRef);
   pausasTimerRef = null;
-  // Reseta filtros ao entrar
+  // v26: abre no questionário ativo e no dia de hoje; os dados vêm do banco
+  // só para o filtro escolhido (em páginas de 1.000, sem limite de linhas).
   const hojeStr = _diaLocal(new Date());
-  const setStr  = _diaLocal(new Date(Date.now() - 7*24*60*60*1000));
   window._pausasFiltros = {
-    data_ini: setStr,
+    data_ini: hojeStr,
     data_fim: hojeStr,
-    pesquisa_id: '',
+    pesquisa_id: _pausasPesquisaPadrao(),
     op_id: '',
     tipo: '',
     so_ativas: false
   };
   window._pausasView = 'lista';
+  window._pausasTela = null;
   renderPausas();
-  // Hidratação em background (silenciosa) — não bloqueia render
-  if (typeof window._hidratarPausasDoAdmin === 'function') {
-    window._hidratarPausasDoAdmin().then(r => {
-      if (window._tabAtual === 'pausas' && r && (r.novas > 0 || r.atualizadas > 0)) {
-        renderPausas();
-      }
-    }).catch(()=>{});
-  }
-  // Auto-refresh a cada 15s (mantém "ativas" e tempos atualizados)
+  _pausasCarregarTela();
+  // Auto-refresh a cada 15s quando o período inclui hoje (ativas e tempos)
   pausasTimerRef = setInterval(() => {
-    if (window._tabAtual === 'pausas') renderPausas();
-    else { clearInterval(pausasTimerRef); pausasTimerRef = null; }
+    if (window._tabAtual !== 'pausas') { clearInterval(pausasTimerRef); pausasTimerRef = null; return; }
+    const f = window._pausasFiltros || {};
+    if (!f.data_fim || f.data_fim >= _diaLocal(new Date())) _pausasCarregarTela();
+    else renderPausas();
   }, 15000);
+}
+
+// v26 — questionário padrão da tela de pausas: o primeiro ativo que o usuário pode ver
+function _pausasPesquisasOpcoes() {
+  return _filtrarPesquisasDoSupervisor(DB.pesquisas || []);
+}
+function _pausasPesquisaPadrao() {
+  const lista = _pausasPesquisasOpcoes();
+  const q = lista.find(p => p.ativa) || lista[0];
+  return q ? String(q.banco_id || q.id) : '';
+}
+
+// v26 — busca as pausas do filtro no banco, página por página (1.000 por vez)
+window._pausasTela = null;
+window._pausasTelaErro = '';
+window._pausasTelaCarregando = false;
+async function _pausasCarregarTela() {
+  const f = window._pausasFiltros || {};
+  if (!f.pesquisa_id) { window._pausasTela = []; window._pausasTelaErro = ''; renderPausas(); return; }
+  if (!window.pausasSb || typeof window.pausasSb.listarGeral !== 'function') {
+    window._pausasTelaErro = 'Banco offline — não foi possível carregar as pausas.'; renderPausas(); return;
+  }
+  const chave = [f.pesquisa_id, f.data_ini, f.data_fim].join('|');
+  window._pausasUltChave = chave;
+  window._pausasTelaCarregando = true;
+  const _ini = f.data_ini ? (() => { const [y,m,d] = f.data_ini.split('-').map(Number); return new Date(y, m-1, d, 0, 0, 0, 0).toISOString(); })() : null;
+  const _fim = f.data_fim ? (() => { const [y,m,d] = f.data_fim.split('-').map(Number); return new Date(y, m-1, d, 23, 59, 59, 999).toISOString(); })() : null;
+  const PAG = 1000;
+  const todas = [];
+  try {
+    for (let off = 0; ; off += PAG) {
+      const r = await window.pausasSb.listarGeral({
+        data_ini: _ini, data_fim: _fim, pesquisa_id: Number(f.pesquisa_id), limit: PAG, offset: off
+      });
+      if (!r.ok) throw new Error(r.error || 'erro desconhecido');
+      const lote = r.data || [];
+      lote.forEach(b => todas.push({
+        id: b.id, banco_id: b.id, op_id: b.op_id, op_nome: b.op_nome,
+        pesquisa_id: b.pesquisa_id, pesquisa_nome: b.pesquisa_nome,
+        tipo: b.tipo, emoji: b.emoji, inicio: b.inicio, fim: b.fim,
+        duracao_seg: b.duracao_seg, encerrada_por: b.encerrada_por, admin_id: b.admin_id, dh: b.inicio
+      }));
+      if (lote.length < PAG) break;
+    }
+    // Descarta resposta velha se o filtro mudou enquanto carregava
+    const g = window._pausasFiltros || {};
+    if ([g.pesquisa_id, g.data_ini, g.data_fim].join('|') !== chave) return;
+    window._pausasTela = todas;
+    window._pausasTelaErro = '';
+  } catch (e) {
+    window._pausasTelaErro = 'Falha ao carregar pausas do banco: ' + (e.message || e);
+  } finally {
+    window._pausasTelaCarregando = false;
+  }
+  if (window._tabAtual === 'pausas') renderPausas();
 }
 
 function _pausasAplicarFiltros(arr) {
@@ -22380,8 +22850,7 @@ function _pausasResumoFiltrosTexto() {
 
 // Helper: pega lista filtrada SÓ ENCERRADAS, ordenada por início desc
 function _pausasDadosParaExportar() {
-  DB.pausas = loadDB('pausas', []);
-  const todas = DB.pausas || [];
+  const todas = window._pausasTela || [];
   const filt = _pausasAplicarFiltros(todas).filter(p => p.fim); // só encerradas
   // ordenar por início desc (mais recente primeiro)
   filt.sort((a, b) => {
@@ -22715,10 +23184,12 @@ function renderPausas() {
   if (!m) { clearInterval(pausasTimerRef); return; }
   const f = window._pausasFiltros || {};
 
-  // Carrega DB.pausas atualizado do localStorage (caso outra aba tenha mexido)
-  DB.pausas = loadDB('pausas', []);
-  const todas = DB.pausas || [];
+  // v26: dados vêm da busca no banco para o questionário e período escolhidos
+  const todas = window._pausasTela || [];
   const filt  = _pausasAplicarFiltros(todas);
+  const _avisoCarga = window._pausasTelaErro
+    ? `<div style="background:rgba(226,75,74,.12);border:1.5px solid #e24b4a;color:#ff8888;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13px;font-weight:700">⚠ ${window._pausasTelaErro}</div>`
+    : ((window._pausasTela === null || window._pausasTelaCarregando) ? `<div style="color:#8b95aa;font-size:12px;margin-bottom:8px">⏳ Carregando pausas do banco…</div>` : '');
 
   // ─── Resumo ───
   const ativas = filt.filter(p => !p.fim);
@@ -22732,11 +23203,11 @@ function renderPausas() {
   Object.entries(porTipo).forEach(([t,n]) => { if (n > tipoTopN) { tipoTopN = n; tipoTop = t; } });
 
   // ─── Opções dos selects ───
-  const qOpts = '<option value="">— Todos —</option>' +
-    _filtrarPesquisasDoSupervisor(DB.pesquisas).map(q => {
+  const qOpts = _pausasPesquisasOpcoes().map(q => {
       const cod = q.codigo ? `[${q.codigo}] ` : '';
-      return `<option value="${q.id}"${String(f.pesquisa_id)===String(q.id)?' selected':''}>${cod}${q.nome}</option>`;
-    }).join('');
+      const qv = String(q.banco_id || q.id);
+      return `<option value="${qv}"${String(f.pesquisa_id)===qv?' selected':''}>${cod}${q.nome}</option>`;
+    }).join('') || '<option value="">— Nenhum questionário —</option>';
   const opOpts = '<option value="">— Todos —</option>' +
     [...DB.operadores].sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR')).map(o =>
       `<option value="${o.id}"${String(f.op_id)===String(o.id)?' selected':''}>${o.nome}</option>`
@@ -22764,10 +23235,11 @@ function renderPausas() {
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button onclick="pgPausasExportarPDF()" class="btn btn-sm" style="font-size:12px;border-color:#c44;color:#ff8888">📄 PDF</button>
         <button onclick="pgPausasExportarExcel()" class="btn btn-sm" style="font-size:12px;border-color:#2dc98e;color:#2dc98e">📊 Excel</button>
-        <button onclick="renderPausas()" class="btn btn-sm" style="font-size:12px">🔄 Atualizar</button>
+        <button onclick="_pausasCarregarTela()" class="btn btn-sm" style="font-size:12px">🔄 Atualizar</button>
       </div>
     </div>
 
+    ${_avisoCarga}
     <!-- Resumo -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
       <div style="background:#2e3850;border:1.5px solid #3a4560;border-radius:10px;padding:10px 12px">
@@ -22800,7 +23272,7 @@ function renderPausas() {
           <input type="date" id="pausa-f-dfim" value="${f.data_fim||''}" onchange="_pausasAtualizarFiltros()" style="width:100%;padding:7px 8px;background:#1a2030;border:1.5px solid #3a4560;border-radius:7px;color:#f0f2f8;font-family:inherit;font-size:13px">
         </div>
         <div>
-          <label style="font-size:11px;color:#8b95aa;font-weight:700;display:block;margin-bottom:3px">Pesquisa</label>
+          <label style="font-size:11px;color:#8b95aa;font-weight:700;display:block;margin-bottom:3px">Questionário</label>
           <select id="pausa-f-q" onchange="_pausasAtualizarFiltros()" style="width:100%;padding:7px 8px;background:#1a2030;border:1.5px solid #3a4560;border-radius:7px;color:#f0f2f8;font-family:inherit;font-size:13px">${qOpts}</select>
         </div>
         <div>
@@ -22852,21 +23324,37 @@ function _pausasAtualizarFiltros() {
   f.op_id       = document.getElementById('pausa-f-op').value || '';
   f.tipo        = document.getElementById('pausa-f-tipo').value || '';
   f.so_ativas   = document.getElementById('pausa-f-ativas').checked;
-  renderPausas();
+  _pausasRecarregarSeMudou();
+}
+
+// v26 — questionário ou período mudou → nova busca no banco; senão só redesenha
+window._pausasUltChave = '';
+function _pausasRecarregarSeMudou() {
+  const f = window._pausasFiltros || {};
+  const chave = [f.pesquisa_id, f.data_ini, f.data_fim].join('|');
+  if (chave !== window._pausasUltChave) {
+    window._pausasUltChave = chave;
+    window._pausasTela = null;
+    renderPausas();
+    _pausasCarregarTela();
+  } else {
+    renderPausas();
+  }
 }
 
 function _pausasLimparFiltros() {
+  const hoje = _diaLocal(new Date());
   window._pausasFiltros = {
-    data_ini: '', data_fim: '', pesquisa_id: '', op_id: '', tipo: '', so_ativas: false
+    data_ini: hoje, data_fim: hoje, pesquisa_id: _pausasPesquisaPadrao(), op_id: '', tipo: '', so_ativas: false
   };
-  renderPausas();
+  _pausasRecarregarSeMudou();
 }
 
 function _pausasFiltroHoje() {
   const hoje = _diaLocal(new Date());
   window._pausasFiltros.data_ini = hoje;
   window._pausasFiltros.data_fim = hoje;
-  renderPausas();
+  _pausasRecarregarSeMudou();
 }
 
 function _pausasFiltro7d() {
@@ -22874,7 +23362,7 @@ function _pausasFiltro7d() {
   const ini  = _diaLocal(new Date(Date.now() - 7*24*60*60*1000));
   window._pausasFiltros.data_ini = ini;
   window._pausasFiltros.data_fim = hoje;
-  renderPausas();
+  _pausasRecarregarSeMudou();
 }
 
 function _pausasFiltro30d() {
@@ -22882,7 +23370,7 @@ function _pausasFiltro30d() {
   const ini  = _diaLocal(new Date(Date.now() - 30*24*60*60*1000));
   window._pausasFiltros.data_ini = ini;
   window._pausasFiltros.data_fim = hoje;
-  renderPausas();
+  _pausasRecarregarSeMudou();
 }
 
 function _pausasRenderView(filt) {
@@ -23078,8 +23566,8 @@ function _pausasViewPorQ(filt) {
 
 // ─── FORÇAR ENCERRAMENTO (admin derruba pausa) ───
 async function _pausasForcarEncerrar(pausaBancoId, opNome, tipo) {
-  if (!sessao || sessao.perfil !== 'admin' || !sessao.id) {
-    toast('Você precisa estar logado como admin');
+  if (!sessao || !sessao.id || !['supervisor','admin','admin_master'].includes(sessao.perfil)) {
+    toast('Você precisa estar logado como supervisor ou admin');
     return;
   }
   const msg = `Encerrar a pausa <b>${tipo||''}</b> de <b>${opNome||'operador'}</b>?<br><br>
@@ -23108,7 +23596,7 @@ async function _pausasForcarEncerrar(pausaBancoId, opNome, tipo) {
       if (typeof window._hidratarPausasDoAdmin === 'function') {
         window._hidratarPausasDoAdmin().catch(()=>{});
       }
-      renderPausas();
+      await _pausasCarregarTela();
     } catch (e) {
       toast('Erro: ' + (e.message || String(e)));
     }
