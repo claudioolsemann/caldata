@@ -4200,7 +4200,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'brilho-v28-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'pesquisas-v29-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4810,7 +4810,7 @@ function nav(tab) {
   // Abas que precisam: dash, aovivo, visaogeral, resultados, relatorio,
   // ponderacao, exportar, gestao, cotas, auditoria.
   // Nota: 'pausas' não está aqui — usa DB.pausas (hidratado no boot), não DB.registros.
-  const abasComRegistros = ['dash','aovivo','visaogeral','resultados','relatorio','ponderacao','exportar','gestao','cotas','auditoria'];
+  const abasComRegistros = ['dash','aovivo','visaogeral','resultados','relatorio','ponderacao','exportar','gestao','cotas','auditoria','pesquisas'];
   if (abasComRegistros.includes(tab) && typeof window._hidratarRegistrosDoBanco === 'function') {
     (async () => {
       try {
@@ -5345,25 +5345,42 @@ async function descadastrarOpQ(opId, qId) {
 // Causa raiz: onclick inline IIFE não tinha try/catch e re-render quebrava se
 // algum operador estivesse com dados inconsistentes. Extraído pra função
 // nomeada com sanity checks e logs claros.
-function incluirOpNaPesquisa(opId, qId) {
+// v29: grava NO BANCO (antes gravava só neste computador e a atribuição não chegava ao agente).
+// Agente (operador) trabalha em UMA pesquisa: incluir troca a pesquisa dele.
+// Supervisor pode ter várias.
+async function incluirOpNaPesquisa(opId, qIdBanco) {
   try {
     if (!opId) { toast('Selecione um operador'); return; }
     const op = DB.operadores.find(o => String(o.id) === String(opId));
     if (!op) { toast('⚠ Operador não encontrado'); return; }
-    if (!op.pesquisas_ids) op.pesquisas_ids = op.pesquisa_id ? [op.pesquisa_id] : [];
-    const nId = _normId(qId);
-    if (!op.pesquisas_ids.map(String).includes(String(nId))) {
-      op.pesquisas_ids.push(nId);
+    if (op.perfil === 'supervisor') {
+      await cadastrarOpQ(op.id, qIdBanco);
+    } else {
+      const atual = op.pesquisa_id ? (DB.pesquisas || []).find(p => String(p.banco_id ?? p.id) === String(op.pesquisa_id) || String(p.id) === String(op.pesquisa_id)) : null;
+      if (atual && String(atual.banco_id ?? atual.id) !== String(qIdBanco)) {
+        if (!confirm(op.nome + ' está na pesquisa "' + atual.nome + '".\n\nO agente trabalha em uma pesquisa por vez. Trocar para esta?')) return;
+      }
+      await _atribuirPesquisaAoOperador({ opId: op.id, novoPesId: qIdBanco, mensagemSucesso: '✓ ' + (op.nome || '').split(' ')[0] + ' incluído na pesquisa' });
     }
-    salvarTudo();
-    const nomeCurto = (op.nome || 'operador').split(' ')[0];
-    toast('✓ ' + nomeCurto + ' cadastrado');
-    pgPesquisas();
+    await sincronizarOperadoresDoBanco();
+    if (window._tabAtual === 'pesquisas') pgPesquisas();
   } catch (e) {
     console.error('[incluirOpNaPesquisa] erro:', e);
     toast('⚠ Erro ao incluir operador: ' + (e.message || e));
   }
 }
+async function removerOpDaPesquisa(opId, qIdBanco) {
+  try {
+    const op = DB.operadores.find(o => String(o.id) === String(opId));
+    if (!op) return;
+    if (!confirm('Tirar ' + op.nome + ' desta pesquisa?')) return;
+    if (op.perfil === 'supervisor') await descadastrarOpQ(op.id, qIdBanco);
+    else await _atribuirPesquisaAoOperador({ opId: op.id, novoPesId: null, mensagemLivre: 'Agente sem pesquisa' });
+    await sincronizarOperadoresDoBanco();
+    if (window._tabAtual === 'pesquisas') pgPesquisas();
+  } catch (e) { toast('⚠ Erro ao remover: ' + (e.message || e)); }
+}
+window.removerOpDaPesquisa = removerOpDaPesquisa;
 // ─── DÉBITO ANTIGO RESOLVIDO: unificação de atribuição operador→pesquisa ───
 // Antes existiam DOIS caminhos pra atribuir uma pesquisa ao operador:
 //
@@ -6845,14 +6862,19 @@ function pgPesquisas() {
   // Filtra operadores válidos uma vez só pra reusar
   const opsValidos = (DB.operadores || []).filter(o => o && o.id != null);
   const cards = qs.map(q => {
-    const v = DB.registros.filter(r => r.pesquisa_id === q.id && r.status===1).length;
+    // v29: a pesquisa importada do Word tem id local diferente do id do banco (banco_id).
+    // Entrevistas e agentes vêm do banco com o id do banco: compara com os dois.
+    const _ids = new Set([String(q.id), String(q.banco_id != null ? q.banco_id : q.id)]);
+    const _qBanco = q.banco_id != null ? q.banco_id : q.id;
+    const v = DB.registros.filter(r => _ids.has(String(r.pesquisa_id)) && Number(r.status)===1 && r.origem !== 'ponderacao').length;
     const pct = q.meta ? Math.min(100, Math.round(v/q.meta*100)) : 0;
-    const opsAtrib = opsValidos.filter(o => o.ativo !== false && (o.pesquisas_ids||[]).map(String).includes(String(q.id)));
-    const opsDisp  = opsValidos.filter(o => o.ativo !== false && !(o.pesquisas_ids||[]).map(String).includes(String(q.id)));
+    const _naQ = o => (o.pesquisas_ids||[]).map(String).some(x => _ids.has(x)) || _ids.has(String(o.pesquisa_id));
+    const opsAtrib = opsValidos.filter(o => o.ativo !== false && !o.excluido && _naQ(o));
+    const opsDisp  = opsValidos.filter(o => o.ativo !== false && !o.excluido && !_naQ(o) && (o.perfil === 'operador' || o.perfil === 'supervisor'));
     const opsHtml  = opsAtrib.length
       ? opsAtrib.map(o => `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;border-radius:8px;background:rgba(29,158,117,.1);margin-bottom:4px">
-          <span style="font-size:13px;font-weight:600;color:#2dc98e">${o.nome}${String(o.pesquisa_id)===String(q.id)?' <span style="font-size:10px;border:1px solid #2dc98e;border-radius:4px;padding:1px 4px">ATIVO</span>':''}</span>
-          <button class="btn btn-sm btn-d" style="font-size:11px" onclick="descadastrarOpQ('${o.id}','${q.id}')">Remover</button>
+          <span style="font-size:13px;font-weight:600;color:#2dc98e">${o.nome}${_ids.has(String(o.pesquisa_id))?' <span style="font-size:10px;border:1px solid #2dc98e;border-radius:4px;padding:1px 4px">ATIVO</span>':''}</span>
+          <button class="btn btn-sm btn-d" style="font-size:11px" onclick="removerOpDaPesquisa('${o.id}','${_qBanco}')">Remover</button>
         </div>`).join('')
       : '<div style="font-size:12px;color:#636d88;font-style:italic">Nenhum operador cadastrado.</div>';
     const selHtml = opsDisp.length
@@ -6861,7 +6883,7 @@ function pgPesquisas() {
              <option value="">— Selecione operador —</option>
              ${opsDisp.map(o=>`<option value="${o.id}">${o.nome}</option>`).join('')}
            </select>
-           <button class="btn btn-sm btn-s" onclick="incluirOpNaPesquisa(document.getElementById('op-add-${q.id}')?.value, '${q.id}')">+ Incluir</button>
+           <button class="btn btn-sm btn-s" onclick="incluirOpNaPesquisa(document.getElementById('op-add-${q.id}')?.value, '${_qBanco}')">+ Incluir</button>
          </div>` : '';
     return `<div class="card" ${q._orfa ? 'style="border:1.5px dashed #636d88;opacity:.75"' : ''}>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
@@ -18929,6 +18951,8 @@ if (document.body) _opBrilhoAplicar(_opBrilhoLer());
 else document.addEventListener('DOMContentLoaded', () => _opBrilhoAplicar(_opBrilhoLer()));
 
 function renderOpInicio() {
+  // v29: só desenha a tela do agente com um agente logado (o Realtime chamava isto no admin com sessão vazia)
+  if (typeof sessao === 'undefined' || !sessao || !sessao.id || !document.getElementById('op-body')) return;
   if (window._opEntrevistaAtiva) {
     console.warn('[op] tela inicial bloqueada: entrevista em andamento (atualização em segundo plano ignorada)');
     return;
