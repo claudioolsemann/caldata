@@ -2631,20 +2631,39 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     // ─── 2. listarRegistros ───
     // Filtros opcionais. Não retorna deletados por padrão.
     async listarRegistros(params) {
+      // O Supabase devolve no máximo 1000 linhas por chamada: busca em páginas até trazer tudo
       try {
         params = params || {};
-        const { data, error } = await supabaseClient.rpc('listar_registros', {
-          p_pesquisa_id: params.pesquisa_id || null,
-          p_op_id: params.op_id || null,
-          p_data_inicio: params.data_inicio || null,
-          p_data_fim: params.data_fim || null,
-          p_status: params.status || null,
-          p_incluir_deletados: !!params.incluir_deletados,
-          p_limit: params.limit || 1000,
-          p_offset: params.offset || 0
-        });
-        if (error) return { ok:false, error: error.message };
-        return { ok:true, data: data || [] };
+        const total = params.limit || 1000;
+        let off = params.offset || 0, cap = null, todos = [], guarda = 0;
+        while (todos.length < total && guarda++ < 400) {
+          const pedido = Math.min(cap || 1000, total - todos.length);
+          const { data, error } = await supabaseClient.rpc('listar_registros', {
+            p_pesquisa_id: params.pesquisa_id || null,
+            p_op_id: params.op_id || null,
+            p_data_inicio: params.data_inicio || null,
+            p_data_fim: params.data_fim || null,
+            p_status: params.status || null,
+            p_incluir_deletados: !!params.incluir_deletados,
+            p_limit: pedido,
+            p_offset: off
+          });
+          if (error) return { ok:false, error: error.message };
+          const d = data || [];
+          const _antes = todos.length ? todos[todos.length-1].id : null;
+          for (const x of d) todos.push(x);
+          off += d.length;
+          if (d.length === 0) break;
+          if (_antes !== null && d.length && d[d.length-1].id === _antes) break; // página repetida: proteção
+          if (d.length < pedido) {
+            if (cap === null && todos.length === d.length) { cap = d.length; continue; } // servidor com limite menor
+            break;
+          }
+        }
+        // remove repetidos (linha nova entrando no meio da paginação desloca as páginas)
+        const vistos = new Set(); const unicos = [];
+        for (const x of todos) { if (!vistos.has(x.id)) { vistos.add(x.id); unicos.push(x); } }
+        return { ok:true, data: unicos };
       } catch(e) { return { ok:false, error: e.message }; }
     },
 
@@ -3383,12 +3402,23 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
 
     const promessa = (async () => {
       try {
-        const r = await window.registrosSb.listarRegistros({ limit: 5000 });
+        const _agora = Date.now();
+        const _cache = window._regBancoCache || (window._regBancoCache = new Map());
+        const _completo = !window._regBancoUltCompleto || (_agora - window._regBancoUltCompleto) > 60*60*1000 || forcar === 'completo';
+        const r = _completo
+          ? await window.registrosSb.listarRegistros({ limit: 500000 })
+          : await window.registrosSb.listarRegistros({ data_inicio: new Date(_agora - 20*60*1000).toISOString(), limit: 500000 });
         if (!r.ok) {
           console.warn('[fase4] hidratação falhou:', r.error);
           return { ok: false, fonte: 'erro', error: r.error };
         }
-        const dosRegistros = (r.data || []).map(_registroDoBanco);
+        if (_completo) { _cache.clear(); window._regBancoUltCompleto = _agora; }
+        window._pgUsarRegistrosEmMemoria = true;
+        (r.data || []).forEach(x => _cache.set(x.id, x));
+        const dosRegistros = Array.from(_cache.values())
+          .sort((a, b) => String(b.dh || '').localeCompare(String(a.dh || '')))
+          .map(_registroDoBanco);
+        console.log('[hidratação]', _completo ? 'completa' : 'incremental', '— recebidas', (r.data || []).length, '· total em memória', _cache.size);
         const dosPendentes = _pendentesList().map(_registroDePendente);
         // Junta (banco primeiro, depois pendentes ainda não sincronizados)
         const completo = [...dosRegistros, ...dosPendentes];
@@ -3935,7 +3965,8 @@ function _loadDBBase(chave, padrao) {
   } catch { return padrao; }
 }
 function saveDB(chave, valor) {
-  try { localStorage.setItem('call_'+chave, JSON.stringify(valor)); } catch(e) {}
+  if (chave === 'registros' && Array.isArray(valor)) valor = valor.filter(r => r && r._origem !== 'banco');
+  try { localStorage.setItem('call_'+chave, JSON.stringify(valor)); } catch(e) { console.warn('[saveDB] falhou', chave, e && e.name); }
 }
 
 let DB = {
@@ -3949,7 +3980,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v13-2026-11-26'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v16-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4524,7 +4555,7 @@ function nav(tab) {
   window._tabAtual = tab;
   // ─── FASE 4 SUB-1: desliga flag de "usar registros do banco" durante o primeiro render ───
   // O primeiro render usa localStorage (instantâneo). Se a hidratação chegar, religamos.
-  window._pgUsarRegistrosEmMemoria = false;
+  if (!window._regBancoUltCompleto) window._pgUsarRegistrosEmMemoria = false;
   // Sempre recarregar registros e operadores do localStorage antes de navegar
   DB.registros  = loadDB('registros',  []);
   /* DB.operadores agora vem do Supabase (sincronizado no login). */
@@ -4709,7 +4740,7 @@ function renderAoVivo() {
           </div>
           <div style="text-align:right;flex-shrink:0">
             <div style="font-size:18px;font-weight:800;color:#2dc98e">${o.validas}</div>
-            <div style="font-size:10px;color:#8b95aa">${o.recusas} recusas · ${o.total} lig.</div>
+            <div style="font-size:10px;color:#8b95aa">${o.recusas} não realizadas · ${o.total} lig.</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
             <button onclick="enviarChatOp('${o.op.id}')" title="Enviar mensagem"
@@ -5676,7 +5707,7 @@ async function _dashAtualizarBanco(manual){
   let ok = false;
   try {
     if (typeof window._hidratarRegistrosDoBanco === 'function') {
-      const r = await window._hidratarRegistrosDoBanco(true);
+      const r = await window._hidratarRegistrosDoBanco(manual ? 'completo' : true);
       ok = !!(r && r.ok);
       if (ok) window._pgUsarRegistrosEmMemoria = true;
     }
@@ -5861,7 +5892,7 @@ function renderDash() {
   document.getElementById('dash-body').innerHTML = `
     <div class="sg">
       <div class="sc"><div class="sv" style="color:#2dc98e">${validas}</div><div class="sl">Válidas</div></div>
-      <div class="sc"><div class="sv" style="color:#f07070">${recusas}</div><div class="sl">Recusas</div></div>
+      <div class="sc"><div class="sv" style="color:#f07070">${recusas}</div><div class="sl">Não realizadas</div></div>
       <div class="sc"><div class="sv" style="color:#f0b840">${semAtend}</div><div class="sl">Sem atend.</div></div>
       <div class="sc"><div class="sv">${total}</div><div class="sl">Total ligações</div></div>
       <div class="sc"><div class="sv">${total?Math.round(validas/total*100):0}%</div><div class="sl">Conversão</div></div>
@@ -5870,7 +5901,7 @@ function renderDash() {
     <div class="card"><div class="card-title">Produção por operador</div>
       ${opRows
         ? `<div style="overflow-x:auto"><table class="tbl">
-            <thead><tr><th>Operador</th><th>Válidas</th><th>Recusas</th><th>Ligações</th><th>Conversão</th></tr></thead>
+            <thead><tr><th>Operador</th><th>Válidas</th><th>Não realizadas</th><th>Ligações</th><th>Conversão</th></tr></thead>
             <tbody>${opRows}</tbody></table></div>`
         : '<p style="font-size:13px;color:#8b95aa">Nenhuma ligação no período selecionado.</p>'}
     </div>`;
@@ -8856,7 +8887,7 @@ async function _cotasAtualizarBanco(btn){
   let ok = false;
   try {
     if (typeof window._hidratarRegistrosDoBanco === 'function') {
-      const r = await window._hidratarRegistrosDoBanco(true);
+      const r = await window._hidratarRegistrosDoBanco('completo');
       ok = !!(r && r.ok);
       if (ok) window._pgUsarRegistrosEmMemoria = true;
     }
@@ -11577,7 +11608,7 @@ async function _resBuscarDoBanco() {
       pesquisa_id: pesquisaIdBanco,
       status: 1,
       incluir_deletados: false,
-      limit: 5000,
+      limit: 500000,
       offset: 0
     });
     if (!r.ok) { toast('Erro ao buscar: ' + r.error); return; }
@@ -14581,12 +14612,21 @@ async function _pondCarregarRegistros() {
 
   try {
     // Busca direto da tabela, sem filtro de status, incluindo externos e ponderados
-    const { data, error } = await window.supabaseClient
-      .from('registros')
-      .select('id, dh, op_id, op_nome, pesquisa_id, pesquisa_nome, status, status_txt, duracao_seg, telefone, telefone_fonte, sexo, idade, faixa_etaria, escolaridade, renda, regiao, outras_dimensoes, respostas')
-      .eq('pesquisa_id', qidBanco)
-      .is('deletado_em', null)
-      .limit(10000);
+    let data = [], error = null;
+    for (let _de = 0, _g = 0; _g < 400; _g++) {
+      const _r = await window.supabaseClient
+        .from('registros')
+        .select('id, dh, op_id, op_nome, pesquisa_id, pesquisa_nome, status, status_txt, duracao_seg, telefone, telefone_fonte, sexo, idade, faixa_etaria, escolaridade, renda, regiao, outras_dimensoes, respostas')
+        .eq('pesquisa_id', qidBanco)
+        .is('deletado_em', null)
+        .order('id', { ascending: true })
+        .range(_de, _de + 999);
+      if (_r.error) { error = _r.error; break; }
+      const _d = _r.data || [];
+      data = data.concat(_d);
+      if (_d.length === 0) break;
+      _de += _d.length;
+    }
 
     if (!error && data) {
       // Mapeia para formato local
@@ -16067,7 +16107,7 @@ async function _extConfirmarImport() {
   // Hidrata registros locais
   if (window.registrosSb) {
     try {
-      const r2 = await window.registrosSb.listarRegistros({ pesquisa_id: pesquisaIdBanco, limit: 5000 });
+      const r2 = await window.registrosSb.listarRegistros({ pesquisa_id: pesquisaIdBanco, limit: 500000 });
       if (r2.ok && r2.data) {
         r2.data.forEach(reg => {
           if (!DB.registros.find(x => x.id === reg.id)) DB.registros.push(reg);
@@ -18562,7 +18602,7 @@ function renderOpInicio() {
       <div style="font-size:13px;font-weight:700;margin-bottom:.5rem">Suas ligações hoje</div>
       <div class="op-sg">
         <div class="op-sc"><div class="op-sv">${eCont.v}</div><div class="op-sl">Válidas</div></div>
-        <div class="op-sc"><div class="op-sv">${eCont.r}</div><div class="op-sl">Recusas</div></div>
+        <div class="op-sc"><div class="op-sv">${eCont.r}</div><div class="op-sl">Não realizadas</div></div>
         <div class="op-sc"><div class="op-sv">${eCont.s}</div><div class="op-sl">Sem atend.</div></div>
         <div class="op-sc"><div class="op-sv">${eCont.t}</div><div class="op-sl">Total</div></div>
       </div>
