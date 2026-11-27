@@ -199,6 +199,79 @@ textarea{resize:vertical}
 .op-sv{font-size:20px;font-weight:800;color:#f2f4fa}
 .op-sl{font-size:11px;color:#c4cad8;margin-top:2px}
 
+/* ── TEMA CLARO DO OPERADOR (v19) — só vale enquanto a tela do operador está aberta ── */
+body:has(#tela-op.ativa){background:#eef1f6;color:#1c2333}
+body:has(#tela-op.ativa) #tela-op.ativa{background:#eef1f6}
+body:has(#tela-op.ativa) .op-topbar{background:#ffffff;border-bottom-color:#d5dbe6}
+body:has(#tela-op.ativa) .op-tb-sub{color:#4a5468}
+body:has(#tela-op.ativa) .op-card,
+body:has(#tela-op.ativa) .card,
+body:has(#tela-op.ativa) .mbox{background:#ffffff;border-color:#d5dbe6}
+body:has(#tela-op.ativa) .perg-num,
+body:has(#tela-op.ativa) .op-sl,
+body:has(#tela-op.ativa) label{color:#4a5468}
+body:has(#tela-op.ativa) .perg-txt,
+body:has(#tela-op.ativa) .op-sv,
+body:has(#tela-op.ativa) .m-title,
+body:has(#tela-op.ativa) .lm-nome{color:#141a26}
+body:has(#tela-op.ativa) .instrucao,
+body:has(#tela-op.ativa) .esc-lb,
+body:has(#tela-op.ativa) .lm-cargo{color:#5a6478}
+body:has(#tela-op.ativa) .pb2{background:#dfe4ee}
+body:has(#tela-op.ativa) .opt,
+body:has(#tela-op.ativa) .esc-btn,
+body:has(#tela-op.ativa) .ns-btn,
+body:has(#tela-op.ativa) .st-btn,
+body:has(#tela-op.ativa) .op-sc,
+body:has(#tela-op.ativa) .btn,
+body:has(#tela-op.ativa) .mf button,
+body:has(#tela-op.ativa) input,
+body:has(#tela-op.ativa) select,
+body:has(#tela-op.ativa) textarea{background:#f6f8fb;border-color:#c9d1df;color:#141a26}
+body:has(#tela-op.ativa) .opt:hover,
+body:has(#tela-op.ativa) .esc-btn:hover,
+body:has(#tela-op.ativa) .ns-btn:hover,
+body:has(#tela-op.ativa) .st-btn:hover,
+body:has(#tela-op.ativa) .btn:hover,
+body:has(#tela-op.ativa) .mf button:hover{background:#e9edf4}
+body:has(#tela-op.ativa) .opt.sel{background:#fff0e8;border-color:#FF4D00}
+body:has(#tela-op.ativa) .ns-btn.on{background:#e1e6ef;border-color:#7a85a0;color:#141a26}
+body:has(#tela-op.ativa) .st-btn.bad{color:#b0281a;border-color:#e74c3c}
+body:has(#tela-op.ativa) .script-box{background:#e8f2fc;color:#164f86}
+body:has(#tela-op.ativa) .btn-p,
+body:has(#tela-op.ativa) .mf .mc{color:#fff!important}
+/* estilos escritos direto nos elementos */
+body:has(#tela-op.ativa) [style*="background:#1e2433"],
+body:has(#tela-op.ativa) [style*="background:#1a1d2e"],
+body:has(#tela-op.ativa) [style*="background:#1d2638"],
+body:has(#tela-op.ativa) [style*="background:#252d40"],
+body:has(#tela-op.ativa) [style*="background:#252e44"]{background:#f1f4f9!important}
+body:has(#tela-op.ativa) [style*="background:#2e3850"],
+body:has(#tela-op.ativa) [style*="background:#272f42"]{background:#f6f8fb!important}
+body:has(#tela-op.ativa) [style*="#3a4560"]{border-color:#c9d1df!important}
+body:has(#tela-op.ativa) [style*="color:#f0f2f8"],
+body:has(#tela-op.ativa) [style*="color:#f2f4fa"],
+body:has(#tela-op.ativa) [style*="color:#e8eaf0"],
+body:has(#tela-op.ativa) [style*="color:#d0d4e0"]{color:#141a26!important}
+body:has(#tela-op.ativa) [style*="color:#c4cad8"]{color:#3a4458!important}
+body:has(#tela-op.ativa) [style*="color:#8b95aa"],
+body:has(#tela-op.ativa) [style*="color:#636d88"],
+body:has(#tela-op.ativa) [style*="color:#aaa"]{color:#5a6478!important}
+body:has(#tela-op.ativa) [style*="color:#2dc98e"]{color:#0f7a55!important}
+body:has(#tela-op.ativa) [style*="color:#f0b840"]{color:#9a6200!important}
+body:has(#tela-op.ativa) [style*="color:#60a8e8"],
+body:has(#tela-op.ativa) [style*="color:#7ec3f0"],
+body:has(#tela-op.ativa) [style*="color:#7eb6ff"]{color:#1d5fa8!important}
+body:has(#tela-op.ativa) [style*="color:#f07070"],
+body:has(#tela-op.ativa) [style*="color:#f09595"]{color:#b8312a!important}
+body:has(#tela-op.ativa) [style*="color:#FF7A40"],
+body:has(#tela-op.ativa) [style*="color:#FF7E3A"],
+body:has(#tela-op.ativa) [style*="color:#FF6B2B"]{color:#c94400!important}
+body:has(#tela-op.ativa) [style*="background:#3a4560"]{background:#e1e6ef!important;color:#3a4458!important}
+body:has(#tela-op.ativa) .op-topbar .chip,
+body:has(#tela-op.ativa) .op-topbar [class*="ch-g"]{color:#0f7a55}
+#tela-op.ativa input,#tela-op.ativa select,#tela-op.ativa textarea{background:#f6f8fb!important;color:#141a26!important;border-color:#c9d1df}
+
 /* ── MODAIS ── */
 .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;align-items:center;justify-content:center;padding:1rem}
 .modal-bg.show{display:flex}
@@ -4006,7 +4079,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v18-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v19-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
