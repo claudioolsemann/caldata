@@ -2677,6 +2677,8 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         if (!params.op_id) return { ok:false, error:'op_id obrigatório' };
         if (params.status == null) return { ok:false, error:'status obrigatório' };
         if (!params.status_txt) return { ok:false, error:'status_txt obrigatório' };
+        if (!params.outras_dimensoes || typeof params.outras_dimensoes !== 'object') params.outras_dimensoes = {};
+        if (!params.outras_dimensoes.client_uuid) params.outras_dimensoes.client_uuid = _novoClientUuid();
         const { data, error } = await supabaseClient.rpc('criar_registro', {
           p_pesquisa_id: params.pesquisa_id,
           p_op_id: params.op_id,
@@ -2696,7 +2698,23 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
           p_respostas: params.respostas || {},
           p_dh: params.dh || null
         });
-        if (error) return { ok:false, error: error.message };
+        if (error) {
+          if (/registros_client_uuid_uk|CALLDATA_DUPLICADO/i.test(error.message || '')) return { ok:true, data: { id: null, duplicado: true } };
+          // MIG 3: o banco recusou a válida porque a célula (ou a meta geral) encheu antes.
+          // Regrava a mesma entrevista como 5 – COTA ENCERRADA, com todas as respostas e a marca excedeu_cota.
+          if (/CALLDATA_COTA_CHEIA/.test(error.message || '') && Number(params.status) === 1 && !params._jaConvertido) {
+            const od = Object.assign({}, params.outras_dimensoes || {}, {
+              excedeu_cota: true,
+              motivo_cota: String(error.message).replace(/^.*CALLDATA_COTA_CHEIA:\s*/, '').slice(0, 200),
+              client_uuid: (params.outras_dimensoes && params.outras_dimensoes.client_uuid ? params.outras_dimensoes.client_uuid : _novoClientUuid()) + '-c5'
+            });
+            const p5 = Object.assign({}, params, { status: 5, status_txt: 'COTA ENCERRADA', outras_dimensoes: od, _jaConvertido: true });
+            const r5 = await window.registrosSb.criarRegistro(p5);
+            if (r5.ok) return { ok:true, data: { id: r5.data && r5.data.id, convertidoCota: true, motivo: od.motivo_cota } };
+            return { ok:false, error: r5.error || error.message };
+          }
+          return { ok:false, error: error.message };
+        }
         return { ok:true, data: { id: data } };
       } catch(e) { return { ok:false, error: e.message || 'erro desconhecido' }; }
     },
@@ -3254,7 +3272,9 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
         p_incluir_deletados: false, p_limit: 50, p_offset: 0
       });
       if (error || !Array.isArray(data)) return false;
-      return data.some(x => String(x.telefone || '') === String(pl.telefone || '') && Number(x.status) === Number(pl.status));
+      const _u = pl.outras_dimensoes && pl.outras_dimensoes.client_uuid;
+      return data.some(x => (_u && x.outras_dimensoes && x.outras_dimensoes.client_uuid === _u) ||
+        (String(x.telefone || '') === String(pl.telefone || '') && Number(x.status) === Number(pl.status)));
     } catch (e) { return false; }
   }
   window._pendJaNoBanco = _pendJaNoBanco;
@@ -4063,6 +4083,11 @@ function _loadDBBase(chave, padrao) {
 function _diaLocal(x){ const d = (x instanceof Date) ? x : new Date(x); if (isNaN(d)) return ''; const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 function _horaLocal(x){ const d = (x instanceof Date) ? x : new Date(x); if (isNaN(d)) return ''; const p = n => String(n).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes()); }
 window._diaLocal = _diaLocal; window._horaLocal = _horaLocal;
+// Grupos de status (decisão KAS 27/11): v=Válida(1) r=Recusa(2,14) c=Cota(5) o=Outra cidade(7) n=Não atendida(resto)
+function _grupoStatus(st){ st = Number(st); return st===1 ? 'v' : (st===2||st===14) ? 'r' : st===5 ? 'c' : st===7 ? 'o' : 'n'; }
+window._grupoStatus = _grupoStatus;
+// Código único de cada gravação: o mesmo código segue na fila, então o banco pode recusar repetição
+function _novoClientUuid(){ try { if (crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e){} return 'u'+Date.now().toString(36)+Math.random().toString(36).slice(2,12); }
 function saveDB(chave, valor) {
   if (chave === 'registros' && Array.isArray(valor)) valor = valor.filter(r => r && r._origem !== 'banco');
   try { localStorage.setItem('call_'+chave, JSON.stringify(valor)); } catch(e) { console.warn('[saveDB] falhou', chave, e && e.name); }
@@ -4079,7 +4104,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v19-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v22-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4123,7 +4148,7 @@ function salvarTudo() {
 // ════════════════════════════════════════
 let sessao = null;
 let loginAlvo = null;
-let eCont = {v:0,r:0,s:0,t:0};
+let eCont = {v:0,r:0,c:0,o:0,s:0,t:0};
 let ePergIdx = 0, eResps = {}, ePesquisa = null;
 let editandoQ = null;
 // Pausa
@@ -4282,7 +4307,7 @@ async function logout() {
     }
   } catch(_){}
   if (pausaAtiva) encerrarPausa(true);
-  sessao = null; eCont = {v:0,r:0,s:0,t:0};
+  sessao = null; eCont = {v:0,r:0,c:0,o:0,s:0,t:0};
   window._telAtual = null;
   window._locCacheOp = null;
   window._sessaoToken = null;
@@ -4787,7 +4812,10 @@ function renderAoVivo() {
     if (filtroQ && !regsHoje.length && !todosHoje.some(r=>r.pesquisa_id==filtroQ)) return null;
 
     const validas  = regsHoje.filter(r=>r.status===1).length;
-    const recusas  = regsHoje.filter(r=>[2,3,4,5,6,7,14].includes(r.status)).length;
+    const recusas  = regsHoje.filter(r=>_grupoStatus(r.status)==='r').length;
+    const cotaEnc  = regsHoje.filter(r=>_grupoStatus(r.status)==='c').length;
+    const outraCid = regsHoje.filter(r=>_grupoStatus(r.status)==='o').length;
+    const naoAtend = regsHoje.filter(r=>_grupoStatus(r.status)==='n').length;
     const total    = regsHoje.length;
     const ultimaAtiv = ultimo ? new Date(ultimo.dh) : null;
     const minAtras   = ultimaAtiv ? Math.round((agora-ultimaAtiv)/60000) : null;
@@ -4801,7 +4829,7 @@ function renderAoVivo() {
     const pausaAtv = pausasOp.sort((a,b)=>b.inicio.localeCompare(a.inicio))[0]||null;
     const pausaSeg = pausaAtv ? Math.round((agora-new Date(pausaAtv.inicio))/1000) : 0;
 
-    return {op,idx,qAtivo,validas,recusas,total,minAtras,online,pausaAtv,pausaSeg};
+    return {op,idx,qAtivo,validas,recusas,cotaEnc,outraCid,naoAtend,total,minAtras,online,pausaAtv,pausaSeg};
   }).filter(Boolean);
 
   // Agrupa por Q
@@ -4839,7 +4867,7 @@ function renderAoVivo() {
           </div>
           <div style="text-align:right;flex-shrink:0">
             <div style="font-size:18px;font-weight:800;color:#2dc98e">${o.validas}</div>
-            <div style="font-size:10px;color:#8b95aa">${o.recusas} não realizadas · ${o.total} lig.</div>
+            <div style="font-size:10px;color:#8b95aa">${o.recusas} recusas · ${o.cotaEnc} cota · ${o.outraCid} outra cid. · ${o.naoAtend} não atend. · ${o.total} lig.</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
             <button onclick="enviarChatOp('${o.op.id}')" title="Enviar mensagem"
@@ -12684,7 +12712,7 @@ function _baixarCSVRejeitados() {
   const a = document.createElement('a');
   a.href = url;
   const tipo = window._ultimoTipoImport || 'tel';
-  a.download = `rejeitados_${tipo}_${new Date().toISOString().slice(0,10).replace(/-/g,'')}.csv`;
+  a.download = `rejeitados_${tipo}_${_diaLocal(new Date()).replace(/-/g,'')}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -12983,7 +13011,7 @@ function _baixarCSVBloqueadosBlacklist() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `bloqueados_blacklist_${new Date().toISOString().slice(0,10).replace(/-/g,'')}.csv`;
+  a.download = `bloqueados_blacklist_${_diaLocal(new Date()).replace(/-/g,'')}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   toast(`✓ CSV baixado (${bloq.length.toLocaleString()} bloqueados)`);
@@ -13271,7 +13299,7 @@ function _exportarContadoresCSV() {
   const a = document.createElement('a');
   a.href = url;
   const pesqTag = pesquisaId ? `_pesq${pesquisaId}` : '_todas';
-  a.download = `contadores_${dimensao}${pesqTag}_${new Date().toISOString().slice(0,10).replace(/-/g,'')}.csv`;
+  a.download = `contadores_${dimensao}${pesqTag}_${_diaLocal(new Date()).replace(/-/g,'')}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   toast(`✓ CSV exportado (${dados.length} linhas)`);
@@ -13729,7 +13757,7 @@ async function _blExportarCSV() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `blacklist_${new Date().toISOString().slice(0,10).replace(/-/g,'')}.csv`;
+  a.download = `blacklist_${_diaLocal(new Date()).replace(/-/g,'')}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   toast(`✓ ${TUDO.length.toLocaleString()} registros exportados`);
@@ -16577,15 +16605,19 @@ function _ceInputPergunta(p, val) {
     const ops = [1, 2, 3, 4, 5, 6, 7].map(n => `<option value="${n}" ${String(val) === String(n) ? 'selected' : ''}>${labels[n]}</option>`).join('');
     return `<select id="${idp}" style="width:100%"><option value="">— sem resposta —</option>${ops}</select>`;
   }
-  if (_ceTipoIdade(p)) {
+  if (_ceTipoIdade(p) && !(Array.isArray(p.opts) && p.opts.length)) {
     const fa = ['16 A 24 ANOS', '25 A 34 ANOS', '35 A 54 ANOS', '55 ANOS OU MAIS'];
+    if (val != null && val !== '' && !fa.includes(String(val))) fa.unshift(String(val));
     const ops = fa.map(o => `<option value="${_escapeAttr(o)}" ${val === o ? 'selected' : ''}>${_escHtmlICR(o)}</option>`).join('');
     return `<select id="${idp}" style="width:100%"><option value="">— sem resposta —</option>${ops}</select>`;
   }
   if (tipo === 'aberta') {
     return `<textarea id="${idp}" rows="2" style="width:100%">${_escHtmlICR(val == null ? '' : String(val))}</textarea>`;
   }
-  const opts = _ceOptsDoTipo(p);
+  const opts = _ceOptsDoTipo(p).slice();
+  // Nunca perder a resposta gravada: se ela não está na lista de opções, entra na lista
+  if (tipo === 'multipla') { (Array.isArray(val) ? val : []).forEach(v => { if (!opts.includes(v)) opts.push(v); }); }
+  else if (val != null && val !== '' && opts.length && !opts.includes(val)) opts.unshift(val);
   if (!opts.length) {
     return `<textarea id="${idp}" rows="2" style="width:100%">${_escHtmlICR(val == null ? '' : String(val))}</textarea>`;
   }
@@ -16683,8 +16715,26 @@ async function _ceSalvarEdicao(id) {
   if (motivo.length < 3) { toast('Informe o motivo da alteração (mín. 3 caracteres)'); return; }
   const q = DB.pesquisas.find(x => x.id == reg.pesquisa_id);
   const perguntas = q ? (q.perguntas || []) : [];
-  const novasResp = _ceColetarRespostas(perguntas);
-  const demo = _ceDerivarDemo(reg, perguntas, novasResp);
+  // Respostas da tela (chave = id da pergunta na tela) → derivadas/pulos → chaves do banco (var_cod).
+  // Antes salvava pela chave da tela e o registro perdia os códigos do Word.
+  const _form = _ceColetarRespostas(perguntas);
+  const _bk = { ePesquisa: (typeof ePesquisa !== 'undefined') ? ePesquisa : null, eResps: (typeof eResps !== 'undefined') ? eResps : null, cota: window._modoCotaCheia };
+  try {
+    ePesquisa = q; eResps = Object.assign({}, _form); window._modoCotaCheia = (Number(reg.status) === 5);
+    if (q && typeof _aplicarDerivadasEPulos === 'function') _aplicarDerivadasEPulos();
+    Object.keys(_form).forEach(k => delete _form[k]); Object.assign(_form, eResps);
+  } catch (e) { console.warn('[editar] derivadas', e); }
+  finally { ePesquisa = _bk.ePesquisa; eResps = _bk.eResps; window._modoCotaCheia = _bk.cota; }
+  const _chave = p => p.var_cod ? String(p.var_cod) : (p.banco_id ? 'p_' + p.banco_id : String(p.id));
+  const _chavesDaPesquisa = new Set(perguntas.map(_chave));
+  const novasResp = {};
+  Object.keys(reg.respostas || {}).forEach(k => { if (!_chavesDaPesquisa.has(k)) novasResp[k] = reg.respostas[k]; }); // mantém chaves de fora do questionário
+  perguntas.forEach(p => { if (_form[p.id] !== undefined) novasResp[_chave(p)] = _form[p.id]; });
+  const demo = _ceDerivarDemo(reg, perguntas, _form);
+  // Cota usa o texto exato das perguntas de perfil
+  if (novasResp['58910'] != null) demo.sexo = String(novasResp['58910']);
+  if (novasResp['59062'] != null) demo.faixa_etaria = String(novasResp['59062']);
+  if (novasResp['58909'] != null) demo.escolaridade = String(novasResp['58909']);
 
   if (!window.supabaseClient) { toast('❌ Sem conexão com o banco'); return; }
   toast('Salvando alteração...');
@@ -16710,7 +16760,7 @@ async function _ceSalvarEdicao(id) {
   }
 
   // Atualiza local imediatamente (consistência instantânea)
-  reg.respostas = novasResp;
+  reg.respostas = novasResp; try { _aliasRespostas([reg]); } catch(_) {}
   reg.sexo = demo.sexo;
   reg.faixa_etaria = demo.faixa_etaria;
   reg.escolaridade = demo.escolaridade;
@@ -18061,7 +18111,15 @@ async function iniciarPainelOp() {
 
   const idx = DB.operadores.findIndex(o => o.id == sessao.id);
   document.getElementById('op-titulo').textContent = 'OP '+(idx+1)+' — Call';
-  eCont = {v:0,r:0,s:0,t:0};
+  eCont = {v:0,r:0,c:0,o:0,s:0,t:0};
+  // Começa com as ligações de hoje deste operador que já estão no banco (antes zerava a cada login)
+  try {
+    const _hj = _diaLocal(new Date());
+    (DB.registros || []).filter(r => r && r.op_id == sessao.id && r.dh && _diaLocal(r.dh) === _hj).forEach(r => {
+      const g = _grupoStatus(r.status); eCont.t++;
+      if (g==='v') eCont.v++; else if (g==='r') eCont.r++; else if (g==='c') eCont.c++; else if (g==='o') eCont.o++; else eCont.s++;
+    });
+  } catch(e) { console.warn('[op] contagem do dia', e); }
 
   // ─── FASE 4 SUB-3 ETAPA 4 — CROSS-PC: restaura pausa ativa do banco ───
   // Cenário: operador iniciou pausa no PC1, fechou aba/desligou, agora abriu o
@@ -18727,11 +18785,13 @@ function renderOpInicio() {
     </div>
     <div class="op-card">
       <div style="font-size:13px;font-weight:700;margin-bottom:.5rem">Suas ligações hoje</div>
-      <div class="op-sg">
-        <div class="op-sc"><div class="op-sv">${eCont.v}</div><div class="op-sl">Válidas</div></div>
-        <div class="op-sc"><div class="op-sv">${eCont.r}</div><div class="op-sl">Não realizadas</div></div>
-        <div class="op-sc"><div class="op-sv">${eCont.s}</div><div class="op-sl">Sem atend.</div></div>
-        <div class="op-sc"><div class="op-sv">${eCont.t}</div><div class="op-sl">Total</div></div>
+      <div class="op-sg" style="grid-template-columns:repeat(3,1fr)">
+        <div class="op-sc"><div class="op-sv" style="color:#0f7a55">${eCont.v}</div><div class="op-sl">Válidas</div></div>
+        <div class="op-sc"><div class="op-sv">${eCont.r}</div><div class="op-sl">Recusas</div></div>
+        <div class="op-sc"><div class="op-sv">${eCont.c||0}</div><div class="op-sl">Cota</div></div>
+        <div class="op-sc"><div class="op-sv">${eCont.o||0}</div><div class="op-sl">Outra cidade</div></div>
+        <div class="op-sc"><div class="op-sv">${eCont.s}</div><div class="op-sl">Não atendidas</div></div>
+        <div class="op-sc"><div class="op-sv">${eCont.t}</div><div class="op-sl">Ligações</div></div>
       </div>
     </div>`;
 }
@@ -19156,8 +19216,7 @@ function regStatus(cod, txt) {
   const duracao_seg = Math.round((agora - _ultimoReg) / 1000);
   _ultimoReg = agora;
   eCont.t++;
-  if ([2,3,5,6,7,14].includes(cod)) eCont.r++;
-  else if ([8,9,10,11,12,13,15].includes(cod)) eCont.s++;
+  { const g = _grupoStatus(cod); if (g==='r') eCont.r++; else if (g==='c') eCont.c++; else if (g==='o') eCont.o++; else if (g==='v') eCont.v++; else eCont.s++; }
   // Salva o telefone usado no registro pra rastreio
   const telUsado = window._telAtual.telefone.tel;
   const telFonte = window._telAtual._fonte || 'manual';
@@ -19573,7 +19632,7 @@ function confAbandono(){
   window._opEntrevistaAtiva = false;
   const agora = Date.now();
   const duracao_seg = _entrevistaInicio ? Math.round((agora-_entrevistaInicio)/1000) : 0;
-  eCont.r++;eCont.t++;
+  eCont.s++;eCont.t++;
   const q=DB.pesquisas.find(p=>p.id===ePesquisa.id);
   try { _aplicarDerivadasEPulos(); } catch(_) {}
   // Salva o telefone usado no registro pra rastreio
@@ -19729,6 +19788,15 @@ function _finalizarComVerif(demo){
       } else {
         console.log('[fase4] finalizarE → banco id:', r.data?.id);
         if (typeof window._opGravFeedback === 'function') window._opGravFeedback(true, r.data?.id);
+        if (r.data && r.data.convertidoCota) {
+          try {
+            const _loc = (DB.registros || []).find(x => x && x.id === agora);
+            if (_loc) { _loc.status = 5; _loc.status_txt = 'COTA ENCERRADA'; }
+            eCont.v = Math.max(0, eCont.v - 1); eCont.c = (eCont.c || 0) + 1;
+            salvarTudo();
+          } catch(_) {}
+          alert('⚠ A cota deste perfil fechou enquanto você entrevistava (outra entrevista do mesmo perfil foi gravada antes).\n\nEsta ligação foi gravada como COTA ENCERRADA, com todas as respostas.\n\nPerfil: ' + (r.data.motivo || ''));
+        }
       }
     } catch(e) {
       console.warn('[fase4] erro inesperado em finalizarE, indo pra fila:', e);
@@ -19861,7 +19929,8 @@ function registrarCotaEncerrada(_st, _stTxt, _telaFim) {
   const q = DB.pesquisas.find(p=>p.id===ePesquisa.id);
   const agora = Date.now();
   const duracao_seg = _entrevistaInicio ? Math.round((agora-_entrevistaInicio)/1000) : 0;
-  eCont.r++; eCont.t++;
+  if (_ST === 7) eCont.o++; else if (_ST === 5) eCont.c++; else { const g=_grupoStatus(_ST); if (g==='r') eCont.r++; else if (g==='v') eCont.v++; else eCont.s++; }
+  eCont.t++;
   const telUsado = window._telAtual?.telefone?.tel || '';
   const telFonte = window._telAtual?._fonte || 'manual';
   const telBancoId = window._telAtual?._telBancoId || null;
