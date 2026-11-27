@@ -4104,7 +4104,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v22-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v23-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -16353,86 +16353,158 @@ function pgConsultaEntrevista() {
   const _ceQs = _filtrarPesquisasDoSupervisor(DB.pesquisas);
   const _ceQOpts = '<option value="">Todas as pesquisas permitidas</option>' +
     _ceQs.map(q => `<option value="${q.id}">${_escHtmlICR(nomeQ(q))}</option>`).join('');
+  const _ops = (DB.operadores || []).filter(o => o && !o.is_ia).slice().sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || '')));
+  const _opOpts = '<option value="">Todos os agentes</option>' + _ops.map(o => `<option value="${o.id}">${_escHtmlICR(o.nome || ('#' + o.id))}</option>`).join('');
+  const _hoje = _diaLocal(new Date());
   document.getElementById('adm-main').innerHTML = `
     <div class="card">
-      <div class="card-title">🔎 Consultar entrevista por telefone</div>
+      <div class="card-title">🔎 Consultar entrevistas</div>
       <div style="font-size:12px;color:#8b95aa;margin-bottom:10px">
-        Digite o telefone em que a entrevista foi realizada (com ou sem DDD).
-        Mostra todas as entrevistas daquele número e permite exportar cada uma.
-        Você só acessa entrevistas das pesquisas que tem permissão.
+        Filtre por agente e período. Cada entrevista tem um <strong>código</strong> (o número do registro no banco): ele é único e nunca se repete.
+        Para ir direto, digite o código (ex.: #19249) ou parte do telefone.
       </div>
-      <div class="row" style="align-items:flex-end">
-        <div class="col" style="flex:1;min-width:220px">
-          <label>Pesquisa</label>
-          <select id="ce-q">${_ceQOpts}</select>
-        </div>
-        <div class="col" style="flex:1;min-width:220px">
-          <label>Telefone</label>
-          <input id="ce-tel" type="text" placeholder="Ex: 41998428402" maxlength="20"
-                 onkeyup="if(event.key==='Enter')_ceBuscar()">
-        </div>
-        <div class="col" style="flex:0">
-          <button class="btn btn-p" onclick="_ceBuscar()">🔎 Buscar</button>
-        </div>
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;align-items:end">
+        <div><label>Pesquisa</label><select id="ce-q">${_ceQOpts}</select></div>
+        <div><label>Agente</label><select id="ce-op">${_opOpts}</select></div>
+        <div><label>Status</label><select id="ce-st">
+          <option value="">Todos</option><option value="v" selected>Válidas</option><option value="r">Recusas</option>
+          <option value="c">Cota encerrada</option><option value="o">Outra cidade</option><option value="n">Não atendidas</option></select></div>
+        <div><label>Código ou telefone</label><input id="ce-tel" type="text" placeholder="#19249 ou 4199..." maxlength="20" onkeyup="if(event.key==='Enter')_ceBuscar()"></div>
+        <div><label>Data início</label><input id="ce-di" type="date" value="${_hoje}"></div>
+        <div><label>Data fim</label><input id="ce-df" type="date" value="${_hoje}"></div>
+        <div><label>Hora início</label><input id="ce-hi" type="time"></div>
+        <div><label>Hora fim</label><input id="ce-hf" type="time"></div>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-sm" onclick="_cePeriodo('hoje')">Hoje</button>
+        <button class="btn btn-sm" onclick="_cePeriodo('ontem')">Ontem</button>
+        <button class="btn btn-sm" onclick="_cePeriodo('7')">7 dias</button>
+        <button class="btn btn-sm" onclick="_cePeriodo('tudo')">Todo o período</button>
+        <button class="btn btn-p" style="margin-left:auto" onclick="_ceBuscar()">🔎 Buscar</button>
       </div>
     </div>
     <div id="ce-result"></div>`;
-  setTimeout(() => { const el = document.getElementById('ce-tel'); if (el) el.focus(); }, 50);
+}
+
+function _cePeriodo(t) {
+  const di = document.getElementById('ce-di'), df = document.getElementById('ce-df');
+  if (!di || !df) return;
+  const h = new Date(), dia = n => _diaLocal(new Date(h.getFullYear(), h.getMonth(), h.getDate() - n));
+  if (t === 'hoje') { di.value = dia(0); df.value = dia(0); }
+  else if (t === 'ontem') { di.value = dia(1); df.value = dia(1); }
+  else if (t === '7') { di.value = dia(6); df.value = dia(0); }
+  else { di.value = ''; df.value = ''; }
+  _ceBuscar();
+}
+
+const _CE_MIN_SEG_VALIDA = 120; // válida com menos que isso aparece com ⚠
+
+function _ceCodigoReal(r) { return r && r._origem === 'banco' && Number(r.id) < 1e12; }
+
+function _ceFiltrar() {
+  const v = id => (document.getElementById(id) ? document.getElementById(id).value : '');
+  const qSel = v('ce-q'), opSel = v('ce-op'), st = v('ce-st'), di = v('ce-di'), df = v('ce-df'), hi = v('ce-hi'), hf = v('ce-hf');
+  const busca = String(v('ce-tel') || '').trim();
+  const permitidas = new Set(_filtrarPesquisasDoSupervisor(DB.pesquisas).map(q => String(q.id)));
+  const regs = (DB.registros || []).filter(r => r && permitidas.has(String(r.pesquisa_id)));
+  // Código (#19249) ou telefone: busca direta, ignora os outros filtros
+  if (busca) {
+    const cod = busca.replace(/^#/, '');
+    const dig = _ceSoDigitos(busca);
+    if (/^#/.test(busca) || (/^\d+$/.test(cod) && cod.length <= 7)) {
+      const porCod = regs.filter(r => _ceCodigoReal(r) && String(r.id) === cod);
+      if (porCod.length || /^#/.test(busca)) return { lista: porCod, modo: 'código ' + '#' + cod };
+    }
+    if (dig.length < 4) return { lista: [], modo: 'telefone (digite ao menos 4 dígitos)' };
+    return { lista: regs.filter(r => { const t = _ceSoDigitos(r.telefone); return t && (t.includes(dig) || dig.includes(t)); }), modo: 'telefone ' + busca };
+  }
+  const lista = regs.filter(r => {
+    if (qSel && String(r.pesquisa_id) !== String(qSel)) return false;
+    if (opSel && String(r.op_id) !== String(opSel)) return false;
+    if (st && _grupoStatus(r.status) !== st) return false;
+    if (!r.dh) return false;
+    const d = _diaLocal(r.dh), h = _horaLocal(r.dh);
+    if (di && d < di) return false;
+    if (df && d > df) return false;
+    if (hi && h < hi) return false;
+    if (hf && h > hf) return false;
+    return true;
+  });
+  return { lista, modo: 'filtros' };
 }
 
 function _ceBuscar() {
   const cont = document.getElementById('ce-result');
   if (!cont) return;
-  const raw = document.getElementById('ce-tel') ? document.getElementById('ce-tel').value : '';
-  const d = _ceSoDigitos(raw);
-  if (d.length < 4) { cont.innerHTML = '<div class="al-info" style="margin:0">Digite ao menos 4 dígitos do telefone.</div>'; return; }
-  DB.registros = loadDB('registros', DB.registros || []);
-  // Política de acesso: supervisor só enxerga as pesquisas que supervisiona; admin/master vê todas.
-  const _permitidas = new Set(_filtrarPesquisasDoSupervisor(DB.pesquisas).map(q => String(q.id)));
-  const _qSel = document.getElementById('ce-q') ? document.getElementById('ce-q').value : '';
-  const achados = DB.registros.filter(r => {
-    if (!_permitidas.has(String(r.pesquisa_id))) return false;          // trava de acesso por papel
-    if (_qSel && String(r.pesquisa_id) !== String(_qSel)) return false; // filtro da pesquisa escolhida
-    const t = _ceSoDigitos(r.telefone);
-    return t && (t === d || t.includes(d) || d.includes(t));
-  }).sort((a, b) => String(b.dh || '').localeCompare(String(a.dh || '')));
-
-  if (!achados.length) {
-    cont.innerHTML = `<div class="al-info" style="margin:0">Nenhuma entrevista encontrada para o número <strong>${_escHtmlICR(raw)}</strong>.</div>`;
-    return;
-  }
-
+  const { lista, modo } = _ceFiltrar();
+  const achados = lista.slice().sort((a, b) => String(a.dh || '').localeCompare(String(b.dh || '')));
+  window._ceUltimaLista = achados;
+  if (!achados.length) { cont.innerHTML = `<div class="al-info" style="margin:0">Nenhuma entrevista encontrada (${_escHtmlICR(modo)}).</div>`; return; }
+  // Ordem do dia: posição da entrevista entre as do mesmo agente, no mesmo dia e no mesmo grupo de status
+  const ordem = new Map(), cont2 = {};
+  (DB.registros || []).filter(r => r && r.dh).slice().sort((a, b) => String(a.dh).localeCompare(String(b.dh))).forEach(r => {
+    const k = r.op_id + '|' + _diaLocal(r.dh) + '|' + r.pesquisa_id + '|' + _grupoStatus(r.status);
+    cont2[k] = (cont2[k] || 0) + 1; ordem.set(r, cont2[k]);
+  });
+  const fmtDur = s => { s = Number(s) || 0; if (!s) return '—'; return Math.floor(s / 60) + 'm' + String(s % 60).padStart(2, '0') + 's'; };
+  const abrev = (x, n) => { x = String(x || ''); return x.length > n ? x.slice(0, n) + '…' : x; };
+  const corSt = { v:'#1d9e75', r:'#c0392b', c:'#7a5bd6', o:'#2f80c9', n:'#5a6478' };
   const linhas = achados.map(r => {
-    const dt = r.dh ? new Date(r.dh).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
+    const g = _grupoStatus(r.status);
+    const curta = g === 'v' && Number(r.duracao_seg) > 0 && Number(r.duracao_seg) < _CE_MIN_SEG_VALIDA;
+    const perfil = [r.sexo ? String(r.sexo).charAt(0) : '', abrev(r.faixa_etaria, 14), abrev(r.escolaridade, 16)].filter(Boolean).join(' · ');
+    const codigo = _ceCodigoReal(r) ? '#' + r.id : '<span style="color:#8b95aa">(enviando)</span>';
     const q = DB.pesquisas.find(x => x.id == r.pesquisa_id);
-    const nomeP = q ? nomeQ(q) : (r.pesquisa_nome || '—');
-    const cor = r.status === 1 ? '#1d9e75' : '#5a6478';
-    const badge = `<span style="background:${cor};color:#fff;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:700">${_escHtmlICR(r.status_txt || ('status ' + r.status))}</span>`;
-    return `
-      <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #2a3550;white-space:nowrap">${dt}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #2a3550">${_escHtmlICR(nomeP)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #2a3550">${_escHtmlICR(r.op_nome || '—')}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #2a3550;white-space:nowrap">${_escHtmlICR(r.telefone || '—')}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #2a3550">${badge}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #2a3550"><button class="btn btn-sm" onclick="_ceVer(${r.id})">👁 Ver</button></td>
-      </tr>`;
+    return `<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550;font-family:monospace;color:#F0B840;white-space:nowrap">${codigo}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550">${ordem.get(r) || ''}ª</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550;white-space:nowrap">${_escHtmlICR(_diaLocal(r.dh).split('-').reverse().slice(0,2).join('/'))} ${_escHtmlICR(_horaLocal(r.dh))}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550">${_escHtmlICR(r.op_nome || '—')}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550;white-space:nowrap">${_escHtmlICR(r.telefone || '—')}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550"><span style="background:${corSt[g]};color:#fff;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:700">${_escHtmlICR(r.status_txt || ('status ' + r.status))}</span></td>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550;white-space:nowrap;${curta ? 'color:#f07070;font-weight:700' : ''}">${fmtDur(r.duracao_seg)}${curta ? ' ⚠' : ''}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550;color:#c4cad8">${_escHtmlICR(perfil || '—')}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #2a3550;white-space:nowrap">
+        <button class="btn btn-sm" onclick="_ceVer(${JSON.stringify(r.id)})">👁 Ver</button>
+        ${_ehAdminOuSupervisor() && _ceCodigoReal(r) ? `<button class="btn btn-sm" style="color:#F0B840;border-color:#F0B840" onclick="_ceEditar(${JSON.stringify(r.id)})">✏ Editar</button>` : ''}
+      </td></tr>`;
   }).join('');
-
+  const nCurtas = achados.filter(r => _grupoStatus(r.status) === 'v' && Number(r.duracao_seg) > 0 && Number(r.duracao_seg) < _CE_MIN_SEG_VALIDA).length;
   cont.innerHTML = `
     <div class="card">
-      <div class="card-title">${achados.length} entrevista(s) encontrada(s)</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <div class="card-title" style="margin:0">${achados.length} entrevista(s) · mais antiga primeiro${nCurtas ? ` · <span style="color:#f07070">${nCurtas} válida(s) com menos de ${_CE_MIN_SEG_VALIDA/60} min ⚠</span>` : ''}</div>
+        <button class="btn btn-sm" onclick="_ceExportarLista()">📊 Exportar lista (Excel)</button>
+      </div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <thead><tr style="text-align:left;color:#8b95aa;font-size:12px">
-            <th style="padding:6px 8px">Data/hora</th><th style="padding:6px 8px">Pesquisa</th>
-            <th style="padding:6px 8px">Operador</th><th style="padding:6px 8px">Telefone</th>
-            <th style="padding:6px 8px">Status</th><th style="padding:6px 8px"></th>
+            <th style="padding:6px 8px">Código</th><th style="padding:6px 8px">Nº</th><th style="padding:6px 8px">Data/hora</th>
+            <th style="padding:6px 8px">Agente</th><th style="padding:6px 8px">Telefone</th><th style="padding:6px 8px">Status</th>
+            <th style="padding:6px 8px">Duração</th><th style="padding:6px 8px">Perfil</th><th style="padding:6px 8px"></th>
           </tr></thead>
           <tbody>${linhas}</tbody>
         </table>
       </div>
     </div>`;
+}
+
+function _ceExportarLista() {
+  const lista = window._ceUltimaLista || [];
+  if (!lista.length) { toast('Nada para exportar'); return; }
+  if (typeof XLSX === 'undefined') { toast('❌ Biblioteca de Excel não carregou'); return; }
+  const linhas = lista.map(r => ({
+    'Código': _ceCodigoReal(r) ? r.id : '(enviando)',
+    'Data': _diaLocal(r.dh), 'Hora': _horaLocal(r.dh),
+    'Agente': r.op_nome || '', 'Telefone': r.telefone || '',
+    'Status': r.status, 'Status (texto)': r.status_txt || '',
+    'Duração (s)': Number(r.duracao_seg) || 0,
+    'Sexo': r.sexo || '', 'Idade': r.faixa_etaria || '', 'Escolaridade': r.escolaridade || '',
+    'Pesquisa': r.pesquisa_nome || ''
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Entrevistas');
+  XLSX.writeFile(wb, 'entrevistas_' + _diaLocal(new Date()).replace(/-/g, '') + '.xlsx');
 }
 
 function _ceRespValor(reg, p) {
