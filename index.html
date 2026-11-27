@@ -3170,6 +3170,21 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
   // interativo=true → ao final, se ainda sobrar pendente, mostra o erro real
   // na tela e oferece descartar (pra nunca ficar preso sem saber o motivo).
   let _pendProcessando = false;
+  // Se a gravação deu certo no banco mas a resposta se perdeu na rede, o item fica na fila.
+  // Antes de reenviar, procura no banco um registro do mesmo operador, mesma hora exata e mesmo telefone.
+  async function _pendJaNoBanco(pl) {
+    try {
+      if (!pl || !pl.dh || !window.supabaseClient) return false;
+      const { data, error } = await window.supabaseClient.rpc('listar_registros', {
+        p_pesquisa_id: pl.pesquisa_id || null, p_op_id: pl.op_id || null,
+        p_data_inicio: pl.dh, p_data_fim: pl.dh, p_status: null,
+        p_incluir_deletados: false, p_limit: 50, p_offset: 0
+      });
+      if (error || !Array.isArray(data)) return false;
+      return data.some(x => String(x.telefone || '') === String(pl.telefone || '') && Number(x.status) === Number(pl.status));
+    } catch (e) { return false; }
+  }
+  window._pendJaNoBanco = _pendJaNoBanco;
   async function _pendentesProcessar(interativo) {
     if (_pendProcessando) { if (interativo && typeof toast === 'function') toast('Envio em andamento, aguarde...'); return; }
     _pendProcessando = true;
@@ -3182,6 +3197,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       const fila = window._pendentesMemoria.slice();
       for (const it of fila) {
         try {
+          if (await _pendJaNoBanco(it.payload)) { window._pendentesMemoria = window._pendentesMemoria.filter(x => x._local_id !== it._local_id); continue; }
           const rm = await window.registrosSb.criarRegistro(it.payload);
           if (rm.ok) window._pendentesMemoria = window._pendentesMemoria.filter(x => x._local_id !== it._local_id);
         } catch(_) {}
@@ -3203,6 +3219,11 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
           const _pHit = _ps.find(x => x.id == item.payload.pesquisa_id)
                      || _ps.find(x => x.banco_id != null && x.banco_id == item.payload.pesquisa_id);
           if (_pHit && _pHit.banco_id) item.payload.pesquisa_id = parseInt(_pHit.banco_id);
+        }
+        if (await _pendJaNoBanco(item.payload)) {
+          _pendentesRemove(item._local_id);
+          console.log('[fila] já estava no banco, não reenviado:', item._local_id);
+          continue;
         }
         const r = await window.registrosSb.criarRegistro(item.payload);
         if (r.ok) {
@@ -3964,6 +3985,11 @@ function _loadDBBase(chave, padrao) {
     return parsed;
   } catch { return padrao; }
 }
+// Dia e hora no fuso do computador (Brasil). Antes o sistema usava UTC: o "dia" virava às 21h
+// e as exportações mostravam a hora 3h adiantada.
+function _diaLocal(x){ const d = (x instanceof Date) ? x : new Date(x); if (isNaN(d)) return ''; const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function _horaLocal(x){ const d = (x instanceof Date) ? x : new Date(x); if (isNaN(d)) return ''; const p = n => String(n).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes()); }
+window._diaLocal = _diaLocal; window._horaLocal = _horaLocal;
 function saveDB(chave, valor) {
   if (chave === 'registros' && Array.isArray(valor)) valor = valor.filter(r => r && r._origem !== 'banco');
   try { localStorage.setItem('call_'+chave, JSON.stringify(valor)); } catch(e) { console.warn('[saveDB] falhou', chave, e && e.name); }
@@ -3980,7 +4006,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'integridade-v16-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'integridade-v18-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -4670,16 +4696,16 @@ function renderAoVivo() {
   const agora  = new Date();
   if (horaEl) horaEl.textContent = agora.toLocaleTimeString('pt-BR');
 
-  const hoje   = agora.toISOString().slice(0,10);
+  const hoje   = _diaLocal(agora);
   const filtroQ = document.getElementById('av-q-sel')?.value || '';
 
   const PAUSA_EMJ = {Banheiro:'🚻',Água:'💧',Instrução:'📋',Intervalo:'☕'};
   const STATUS_PAUSA = {Banheiro:'#60a8e8',Água:'#2dc98e',Instrução:'#f0b840',Intervalo:'#f0b840'};
 
   const opStatus = DB.operadores.filter(o => !o.is_ia).map((op,idx) => {
-    let regsHoje = DB.registros.filter(r=>r.op_id===op.id&&r.dh.startsWith(hoje));
+    let regsHoje = DB.registros.filter(r=>r.op_id===op.id&&_diaLocal(r.dh)===hoje);
     if (filtroQ) regsHoje = regsHoje.filter(r=>r.pesquisa_id==filtroQ);
-    const todosHoje = DB.registros.filter(r=>r.op_id===op.id&&r.dh.startsWith(hoje));
+    const todosHoje = DB.registros.filter(r=>r.op_id===op.id&&_diaLocal(r.dh)===hoje);
     const ultimo = todosHoje.sort((a,b)=>b.dh.localeCompare(a.dh))[0];
     const qAtivo = ultimo ? DB.pesquisas.find(p=>p.id===ultimo.pesquisa_id)
                           : (op.pesquisa_id ? DB.pesquisas.find(p=>p.id===op.pesquisa_id) : null);
@@ -4773,7 +4799,7 @@ function renderAoVivo() {
   // Progresso por Q hoje
   const _ativasAoVivo = _filtrarPesquisasDoSupervisor(DB.pesquisas.filter(p=>p.ativa));
   const progQ = (filtroQ ? _ativasAoVivo.filter(p=>p.id==filtroQ) : _ativasAoVivo).map(p=>{
-    const rH = DB.registros.filter(r=>r.pesquisa_id===p.id&&r.dh.startsWith(hoje));
+    const rH = DB.registros.filter(r=>r.pesquisa_id===p.id&&_diaLocal(r.dh)===hoje);
     const v  = rH.filter(r=>r.status===1).length;
     const pct= p.meta?Math.min(100,Math.round(v/p.meta*100)):0;
     return v>0?`<div style="margin-bottom:8px">
@@ -4789,8 +4815,8 @@ function renderAoVivo() {
   m.innerHTML = `
     <div class="sg" style="margin-bottom:1rem">
       <div class="sc"><div class="sv" style="color:#2dc98e">${ativos.length}</div><div class="sl">Ativos agora</div></div>
-      <div class="sc"><div class="sv">${DB.registros.filter(r=>r.status===1&&r.dh.startsWith(hoje)).length}</div><div class="sl">Entrevistas hoje</div></div>
-      <div class="sc"><div class="sv">${DB.registros.filter(r=>r.dh.startsWith(hoje)).length}</div><div class="sl">Ligações hoje</div></div>
+      <div class="sc"><div class="sv">${DB.registros.filter(r=>r.status===1&&_diaLocal(r.dh)===hoje).length}</div><div class="sl">Entrevistas hoje</div></div>
+      <div class="sc"><div class="sv">${DB.registros.filter(r=>_diaLocal(r.dh)===hoje).length}</div><div class="sl">Ligações hoje</div></div>
       <div class="sc"><div class="sv" style="color:#f0b840">${(DB.pausas||[]).filter(p=>!p.fim).length}</div><div class="sl">Em pausa</div></div>
     </div>
     <style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}</style>
@@ -4833,7 +4859,7 @@ function renderGestao() {
   const m = document.getElementById('adm-main');
   if (!m) { clearInterval(gestaoTimerRef); return; }
   const agora = new Date();
-  const hoje = agora.toISOString().slice(0,10);
+  const hoje = _diaLocal(agora);
   const filtroQ = document.getElementById('gestao-q-sel')?.value || '';
   const filtroStatus = document.getElementById('gestao-status-sel')?.value || '';
   let ops = _filtrarOperadoresDoSupervisor([...DB.operadores].filter(o => !o.is_ia));
@@ -4844,7 +4870,7 @@ function renderGestao() {
   else if (filtroStatus === 'habilitado') ops = ops.filter(o => o.habilitado !== false && o.ativo);
   else if (filtroStatus === 'desabilitado') ops = ops.filter(o => o.habilitado === false || !o.ativo);
   const pesAtivas = _filtrarPesquisasDoSupervisor(DB.pesquisas.filter(p => p.ativa));
-  const pausasHoje = DB.pausas.filter(p => p.dh && p.dh.startsWith(hoje));
+  const pausasHoje = DB.pausas.filter(p => p.dh && _diaLocal(p.dh)===hoje);
   const _qsGestao = _filtrarPesquisasDoSupervisor(DB.pesquisas);
   const qOpts = '<option value="">— Todos os questionários —</option>' + _qsGestao.map(q => {
     const cod = q.codigo ? `[${q.codigo}] ` : '';
@@ -4861,8 +4887,8 @@ function renderGestao() {
     const regsOp = DB.registros.filter(r => r.op_id === op.id);
     const regsQ0 = filtroQ ? regsOp.filter(r => r.pesquisa_id == filtroQ) : regsOp;
     const regsQ = filtrarPorPeriodo(regsQ0, _pG.dtIni, _pG.dtFim, _pG.hrIni, _pG.hrFim);
-    const regsHoje = regsQ.filter(r => r.dh.startsWith(hoje));
-    const pausasOp = DB.pausas.filter(p => p.op_id === op.id && p.dh && p.dh.startsWith(hoje));
+    const regsHoje = regsQ.filter(r => _diaLocal(r.dh)===hoje);
+    const pausasOp = DB.pausas.filter(p => p.op_id === op.id && p.dh && _diaLocal(p.dh)===hoje);
     const pausaAtualOp = DB.pausas.find(p => p.op_id === op.id && !p.fim);
     const idxGlobal = DB.operadores.findIndex(o => o.id === op.id);
     const ini = op.nome.split(' ').map(n => n[0]).join('').slice(0, 2);
@@ -5241,11 +5267,11 @@ function renderVisaoGeral() {
   const qid = document.getElementById('vg-q-sel')?.value;
   const q = DB.pesquisas.find(x => x.id == qid);
   if (!q) return;
-  const hoje = new Date().toISOString().slice(0,10);
+  const hoje = _diaLocal(new Date());
   const _pVG = getPeriodoFiltro('vg');
   const regsQTodos = DB.registros.filter(r => r.pesquisa_id == qid);
   const regsQ = filtrarPorPeriodo(regsQTodos, _pVG.dtIni, _pVG.dtFim, _pVG.hrIni, _pVG.hrFim);
-  const regsHoje = regsQ.filter(r => r.dh.startsWith(hoje));
+  const regsHoje = regsQ.filter(r => _diaLocal(r.dh)===hoje);
   const validas = regsQ.filter(r => r.status === 1);
   const validasHoje = regsHoje.filter(r => r.status === 1);
   const pct = q.meta ? Math.min(100, Math.round(validas.length / q.meta * 100)) : 0;
@@ -5279,7 +5305,7 @@ function renderVisaoGeral() {
   // Tabela por operador
   const linhasOps = todosOps.map((op, i) => {
     const rOp = regsQ.filter(r => r.op_id === op.id);
-    const rHoje = rOp.filter(r => r.dh.startsWith(hoje));
+    const rHoje = rOp.filter(r => _diaLocal(r.dh)===hoje);
     const vOp = rOp.filter(r => r.status === 1).length;
     const vHoje = rHoje.filter(r => r.status === 1).length;
     const pausaAtualOp = DB.pausas.find(p => p.op_id === op.id && !p.fim);
@@ -5426,8 +5452,8 @@ function abrirDetalheQOp(opId, qId) {
   if (!op || !q) return;
 
   const regsOp = DB.registros.filter(r => r.op_id == opId && r.pesquisa_id == qId);
-  const hoje = new Date().toISOString().slice(0,10);
-  const regsHoje = regsOp.filter(r => r.dh.startsWith(hoje));
+  const hoje = _diaLocal(new Date());
+  const regsHoje = regsOp.filter(r => _diaLocal(r.dh)===hoje);
   const pausasOp = DB.pausas.filter(p => p.op_id == opId && p.pesquisa_id == qId);
 
   const STATUS_TODOS = [
@@ -5502,9 +5528,9 @@ function abrirDetalheQOp(opId, qId) {
   const dias = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate() - i);
-    const ds = d.toISOString().slice(0,10);
-    const v = regsOp.filter(r => r.dh.startsWith(ds) && r.status === 1).length;
-    const t = regsOp.filter(r => r.dh.startsWith(ds)).length;
+    const ds = _diaLocal(d);
+    const v = regsOp.filter(r => _diaLocal(r.dh)===ds && r.status === 1).length;
+    const t = regsOp.filter(r => _diaLocal(r.dh)===ds).length;
     if (v || t) dias.push({ ds: ds.slice(5), v, t });
   }
   const maxDia = Math.max(...dias.map(d => d.t), 1);
@@ -5661,7 +5687,7 @@ function pgDash() {
   DB.pausas     = loadDB('pausas',     []);
   clearInterval(aoVivoTimer); aoVivoTimer = null;
   const todas = _filtrarPesquisasDoSupervisor(DB.pesquisas);
-  const hojeISO = new Date().toISOString().slice(0,10);
+  const hojeISO = _diaLocal(new Date());
   const qOpts = '<option value="">Todas as pesquisas</option>' + todas.map(q=>`<option value="${q.id}">${nomeQ(q)}${q.ativa?'':' (inativa)'}</option>`).join('');
   document.getElementById('adm-main').innerHTML = `
     <div class="card" style="margin-bottom:1rem">
@@ -5723,7 +5749,7 @@ async function _dashAtualizarBanco(manual){
 window._dashAtualizarBanco = _dashAtualizarBanco;
 
 function _dashFiltroHoje() {
-  const hoje = new Date().toISOString().slice(0,10);
+  const hoje = _diaLocal(new Date());
   const ini = document.getElementById('dash-data-ini');
   const fim = document.getElementById('dash-data-fim');
   if (ini) ini.value = hoje;
@@ -5731,8 +5757,8 @@ function _dashFiltroHoje() {
   renderDash();
 }
 function _dashFiltro7d() {
-  const hoje = new Date().toISOString().slice(0,10);
-  const ini7 = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+  const hoje = _diaLocal(new Date());
+  const ini7 = _diaLocal(new Date(Date.now()-7*864e5));
   const ini = document.getElementById('dash-data-ini');
   const fim = document.getElementById('dash-data-fim');
   if (ini) ini.value = ini7;
@@ -5754,12 +5780,17 @@ function renderDash() {
 
   let regs = [...DB.registros];
   if (qid) regs = regs.filter(r => r.pesquisa_id == qid);
-  if (dataIni) regs = regs.filter(r => r.dh && r.dh.slice(0,10) >= dataIni);
-  if (dataFim) regs = regs.filter(r => r.dh && r.dh.slice(0,10) <= dataFim);
+  if (dataIni) regs = regs.filter(r => r.dh && _diaLocal(r.dh) >= dataIni);
+  if (dataFim) regs = regs.filter(r => r.dh && _diaLocal(r.dh) <= dataFim);
 
   const validas  = regs.filter(r=>r.status===1).length;
-  const recusas  = regs.filter(r=>[2,3,4,5,6,7,14].includes(r.status)).length;
-  const semAtend = regs.filter(r=>[8,9,10,11,12,13,15].includes(r.status)).length;
+  // Grupos do painel (decisão KAS 27/11): Recusas = 2 e 14; Cota = 5; Outra cidade = 7;
+  // Não atendidas = todo o resto (inclui 3, 4, 6, 8-13, 15 e status sem código). Soma = Ligações.
+  const _grpDash = (st) => st===1 ? 'v' : (st===2||st===14) ? 'r' : st===5 ? 'c' : st===7 ? 'o' : 'n';
+  const recusas  = regs.filter(r=>_grpDash(r.status)==='r').length;
+  const cotaEnc  = regs.filter(r=>_grpDash(r.status)==='c').length;
+  const outraCid = regs.filter(r=>_grpDash(r.status)==='o').length;
+  const semAtend = regs.filter(r=>_grpDash(r.status)==='n').length;
   const total    = regs.length;
 
   // Progresso por pesquisa
@@ -5873,7 +5904,10 @@ function renderDash() {
   const opRows = _filtrarOperadoresDoSupervisor(DB.operadores.filter(o=>o.ativo)).map((o,i) => {
     const r   = regs.filter(x=>x.op_id===o.id);
     const v   = r.filter(x=>x.status===1).length;
-    const rec = r.filter(x=>[2,3,4,5,6,7,14].includes(x.status)).length;
+    const rec = r.filter(x=>_grpDash(x.status)==='r').length;
+    const cot = r.filter(x=>_grpDash(x.status)==='c').length;
+    const oc  = r.filter(x=>_grpDash(x.status)==='o').length;
+    const na  = r.filter(x=>_grpDash(x.status)==='n').length;
     const tot = r.length;
     const txConv = tot ? Math.round(v/tot*100) : 0;
     if (!tot) return '';
@@ -5884,6 +5918,9 @@ function renderDash() {
       </div></td>
       <td><span class="chip ch-g">${v}</span></td>
       <td><span class="chip ch-r">${rec}</span></td>
+      <td><span class="chip" style="background:#3a3260;color:#b89cff">${cot}</span></td>
+      <td><span class="chip" style="background:#22405a;color:#5fb8f0">${oc}</span></td>
+      <td><span class="chip" style="background:#4a3d1f;color:#f0b840">${na}</span></td>
       <td>${tot}</td>
       <td><span style="font-size:12px;font-weight:700;color:${txConv>=30?'#2dc98e':txConv>=15?'#f0b840':'#f07070'}">${txConv}%</span></td>
     </tr>`;
@@ -5892,16 +5929,18 @@ function renderDash() {
   document.getElementById('dash-body').innerHTML = `
     <div class="sg">
       <div class="sc"><div class="sv" style="color:#2dc98e">${validas}</div><div class="sl">Válidas</div></div>
-      <div class="sc"><div class="sv" style="color:#f07070">${recusas}</div><div class="sl">Não realizadas</div></div>
-      <div class="sc"><div class="sv" style="color:#f0b840">${semAtend}</div><div class="sl">Sem atend.</div></div>
-      <div class="sc"><div class="sv">${total}</div><div class="sl">Total ligações</div></div>
+      <div class="sc"><div class="sv" style="color:#f07070">${recusas}</div><div class="sl">Recusas</div></div>
+      <div class="sc"><div class="sv" style="color:#b89cff">${cotaEnc}</div><div class="sl">Cota</div></div>
+      <div class="sc"><div class="sv" style="color:#5fb8f0">${outraCid}</div><div class="sl">Outra cidade</div></div>
+      <div class="sc"><div class="sv" style="color:#f0b840">${semAtend}</div><div class="sl">Não atendidas</div></div>
+      <div class="sc"><div class="sv">${total}</div><div class="sl">Ligações</div></div>
       <div class="sc"><div class="sv">${total?Math.round(validas/total*100):0}%</div><div class="sl">Conversão</div></div>
     </div>
     ${pRows ? `<div class="card"><div class="card-title">Progresso das pesquisas</div>${pRows}</div>` : ''}
     <div class="card"><div class="card-title">Produção por operador</div>
       ${opRows
         ? `<div style="overflow-x:auto"><table class="tbl">
-            <thead><tr><th>Operador</th><th>Válidas</th><th>Não realizadas</th><th>Ligações</th><th>Conversão</th></tr></thead>
+            <thead><tr><th>Operador</th><th>Válidas</th><th>Recusas</th><th>Cota</th><th>Outra cidade</th><th>Não atendidas</th><th>Ligações</th><th>Conversão</th></tr></thead>
             <tbody>${opRows}</tbody></table></div>`
         : '<p style="font-size:13px;color:#8b95aa">Nenhuma ligação no período selecionado.</p>'}
     </div>`;
@@ -8021,12 +8060,17 @@ async function pgAuditoriaExportarPDF() {
 
   toast('⏳ Gerando PDF…');
   // Pra exportar, busca SEM paginação (até 5000 linhas pra segurança)
-  const filtros = { ...f, p_limite: 5000, p_offset: 0 };
+  const filtros = { ...f, p_limite: 1000, p_offset: 0 };
   let linhas = [];
   try {
-    const { data, error } = await supabaseClient.rpc('listar_auditoria', filtros);
-    if (error) throw error;
-    linhas = data || [];
+    linhas = [];
+    for (let _g = 0; _g < 200; _g++) {
+      const { data, error } = await supabaseClient.rpc('listar_auditoria', { ...filtros, p_offset: linhas.length });
+      if (error) throw error;
+      const _d = data || [];
+      linhas = linhas.concat(_d);
+      if (_d.length === 0 || linhas.length >= 50000) break;
+    }
   } catch (e) {
     toast('❌ Erro: ' + (e.message || e));
     return;
@@ -8104,12 +8148,17 @@ async function pgAuditoriaExportarExcel() {
   if (!f) { toast('Aplique um filtro primeiro'); return; }
 
   toast('⏳ Gerando Excel…');
-  const filtros = { ...f, p_limite: 5000, p_offset: 0 };
+  const filtros = { ...f, p_limite: 1000, p_offset: 0 };
   let linhas = [];
   try {
-    const { data, error } = await supabaseClient.rpc('listar_auditoria', filtros);
-    if (error) throw error;
-    linhas = data || [];
+    linhas = [];
+    for (let _g = 0; _g < 200; _g++) {
+      const { data, error } = await supabaseClient.rpc('listar_auditoria', { ...filtros, p_offset: linhas.length });
+      if (error) throw error;
+      const _d = data || [];
+      linhas = linhas.concat(_d);
+      if (_d.length === 0 || linhas.length >= 50000) break;
+    }
   } catch (e) {
     toast('❌ Erro: ' + (e.message || e));
     return;
@@ -8166,12 +8215,17 @@ async function pgAuditoriaExportarCSV() {
   if (!f) { toast('Aplique um filtro primeiro'); return; }
 
   toast('⏳ Gerando CSV…');
-  const filtros = { ...f, p_limite: 5000, p_offset: 0 };
+  const filtros = { ...f, p_limite: 1000, p_offset: 0 };
   let linhas = [];
   try {
-    const { data, error } = await supabaseClient.rpc('listar_auditoria', filtros);
-    if (error) throw error;
-    linhas = data || [];
+    linhas = [];
+    for (let _g = 0; _g < 200; _g++) {
+      const { data, error } = await supabaseClient.rpc('listar_auditoria', { ...filtros, p_offset: linhas.length });
+      if (error) throw error;
+      const _d = data || [];
+      linhas = linhas.concat(_d);
+      if (_d.length === 0 || linhas.length >= 50000) break;
+    }
   } catch (e) {
     toast('❌ Erro: ' + (e.message || e));
     return;
@@ -10123,8 +10177,8 @@ function filtrarPorPeriodo(regs, dtIni, dtFim, hrIni, hrFim) {
   if (!dtIni && !dtFim && !hrIni && !hrFim) return regs;
   return regs.filter(r => {
     const dh = new Date(r.dh);
-    const data = r.dh.slice(0,10);
-    const hora = r.dh.slice(11,16);
+    const data = _diaLocal(r.dh);
+    const hora = _horaLocal(r.dh);
     if (dtIni && data < dtIni) return false;
     if (dtFim && data > dtFim) return false;
     if (hrIni && hora < hrIni) return false;
@@ -10143,7 +10197,7 @@ function getPeriodoFiltro(prefix) {
 }
 
 function periodoHtml(prefix, onchange) {
-  const hoje = new Date().toISOString().slice(0,10);
+  const hoje = _diaLocal(new Date());
   return `<div style="border-top:1px solid #3a4560;margin-top:10px;padding-top:10px">
     <div style="font-size:11px;font-weight:700;color:#8b95aa;margin-bottom:8px;letter-spacing:.05em">📅 PERÍODO</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;align-items:end">
@@ -10167,12 +10221,12 @@ function periodoHtml(prefix, onchange) {
 
 function setPeriodo(prefix, tipo, onchange) {
   const hoje = new Date();
-  const hojeStr = hoje.toISOString().slice(0,10);
+  const hojeStr = _diaLocal(hoje);
   let ini = '', fim = hojeStr;
   if (tipo === 'hoje') { ini = hojeStr; }
   else if (tipo === 'semana') {
     const d = new Date(hoje); d.setDate(d.getDate() - d.getDay());
-    ini = d.toISOString().slice(0,10);
+    ini = _diaLocal(d);
   } else if (tipo === 'mes') {
     ini = hojeStr.slice(0,7) + '-01';
   } else { ini = ''; fim = ''; }
@@ -11849,7 +11903,7 @@ function exportResultadosExcel() {
     const pergIds = pergs.map(p=>p.id);
     const header = ['DATA','HORA','OP','SEXO','FAIXA_ETARIA','ESCOLARIDADE','REGIAO',...pergs.map(p=>p.var_cod)];
     const brutos = [header, ...regs.map(r=>[
-      r.dh?.slice(0,10), r.dh?.slice(11,16), r.op_nome||'',
+      _diaLocal(r.dh), _horaLocal(r.dh), r.op_nome||'',
       r.sexo||'', r.faixa_etaria||'', r.escolaridade||'', r.regiao||'',
       ...pergs.map(p=>(r.respostas||{})[p.id]||'')
     ])];
@@ -17089,7 +17143,7 @@ function exportProducaoExcel() {
     Object.values(opsMap).forEach(op => {
       const detHeader = ['Data','Hora','Pesquisa','Status','Respostas'];
       const detData = [detHeader, ...op.regs.map(r => [
-        r.dh.slice(0,10), r.dh.slice(11,16),
+        _diaLocal(r.dh), _horaLocal(r.dh),
         r.pesquisa_nome||'', r.status_txt||r.status,
         Object.keys(r.respostas||{}).length
       ])];
@@ -17107,7 +17161,7 @@ function exportProducaoCSV() {
   if (!regs.length) { toast('Sem dados'); return; }
   const header = ['operador','data','hora','pesquisa','status','status_txt'];
   const rows = regs.map(r => [
-    r.op_nome||'', r.dh.slice(0,10), r.dh.slice(11,16),
+    r.op_nome||'', _diaLocal(r.dh), _horaLocal(r.dh),
     r.pesquisa_nome||'', r.status, r.status_txt||''
   ]);
   const _nl = String.fromCharCode(10);
@@ -20468,7 +20522,12 @@ async function confirmarImport() {
         if (typeof window.pesquisaSb.salvarPergunta === 'function') {
           for (const p of (q.perguntas || [])) {
             try {
-              await window.pesquisaSb.salvarPergunta(q.banco_id, p);
+              const _rp = await window.pesquisaSb.salvarPergunta(q.banco_id, p);
+              if (_rp && _rp.ok && _rp.data != null) {
+                const _v = Array.isArray(_rp.data) ? _rp.data[0] : _rp.data;
+                const _bid = (_v && typeof _v === 'object') ? (_v.id ?? _v.salvar_pergunta) : _v;
+                if (_bid != null && !isNaN(Number(_bid))) p.banco_id = Number(_bid);
+              }
             } catch(e) {
               console.warn('[confirmarImport] falha ao salvar pergunta', p.id, ':', e.message);
             }
@@ -22024,8 +22083,8 @@ function pgPausas() {
   clearInterval(pausasTimerRef);
   pausasTimerRef = null;
   // Reseta filtros ao entrar
-  const hojeStr = new Date().toISOString().slice(0,10);
-  const setStr  = new Date(Date.now() - 7*24*60*60*1000).toISOString().slice(0,10);
+  const hojeStr = _diaLocal(new Date());
+  const setStr  = _diaLocal(new Date(Date.now() - 7*24*60*60*1000));
   window._pausasFiltros = {
     data_ini: setStr,
     data_fim: hojeStr,
@@ -22060,7 +22119,7 @@ function _pausasAplicarFiltros(arr) {
     // período (compara apenas data, ignora hora)
     const dh = p.inicio || p.dh;
     if (!dh) return false;
-    const d = dh.slice(0,10);
+    const d = _diaLocal(dh);
     if (f.data_ini && d < f.data_ini) return false;
     if (f.data_fim && d > f.data_fim) return false;
     if (f.pesquisa_id && String(p.pesquisa_id||'') !== String(f.pesquisa_id)) return false;
@@ -22590,23 +22649,23 @@ function _pausasLimparFiltros() {
 }
 
 function _pausasFiltroHoje() {
-  const hoje = new Date().toISOString().slice(0,10);
+  const hoje = _diaLocal(new Date());
   window._pausasFiltros.data_ini = hoje;
   window._pausasFiltros.data_fim = hoje;
   renderPausas();
 }
 
 function _pausasFiltro7d() {
-  const hoje = new Date().toISOString().slice(0,10);
-  const ini  = new Date(Date.now() - 7*24*60*60*1000).toISOString().slice(0,10);
+  const hoje = _diaLocal(new Date());
+  const ini  = _diaLocal(new Date(Date.now() - 7*24*60*60*1000));
   window._pausasFiltros.data_ini = ini;
   window._pausasFiltros.data_fim = hoje;
   renderPausas();
 }
 
 function _pausasFiltro30d() {
-  const hoje = new Date().toISOString().slice(0,10);
-  const ini  = new Date(Date.now() - 30*24*60*60*1000).toISOString().slice(0,10);
+  const hoje = _diaLocal(new Date());
+  const ini  = _diaLocal(new Date(Date.now() - 30*24*60*60*1000));
   window._pausasFiltros.data_ini = ini;
   window._pausasFiltros.data_fim = hoje;
   renderPausas();
