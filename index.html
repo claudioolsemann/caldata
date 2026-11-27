@@ -200,77 +200,91 @@ textarea{resize:vertical}
 .op-sl{font-size:11px;color:#c4cad8;margin-top:2px}
 
 /* ── TEMA CLARO DO OPERADOR (v19) — só vale enquanto a tela do operador está aberta ── */
-body:has(#tela-op.ativa){background:#eef1f6;color:#1c2333}
-body:has(#tela-op.ativa) #tela-op.ativa{background:#eef1f6}
-body:has(#tela-op.ativa) .op-topbar{background:#ffffff;border-bottom-color:#d5dbe6}
-body:has(#tela-op.ativa) .op-tb-sub{color:#4a5468}
-body:has(#tela-op.ativa) .op-card,
-body:has(#tela-op.ativa) .card,
-body:has(#tela-op.ativa) .mbox{background:#ffffff;border-color:#d5dbe6}
-body:has(#tela-op.ativa) .perg-num,
-body:has(#tela-op.ativa) .op-sl,
-body:has(#tela-op.ativa) label{color:#4a5468}
-body:has(#tela-op.ativa) .perg-txt,
-body:has(#tela-op.ativa) .op-sv,
-body:has(#tela-op.ativa) .m-title,
-body:has(#tela-op.ativa) .lm-nome{color:#141a26}
-body:has(#tela-op.ativa) .instrucao,
-body:has(#tela-op.ativa) .esc-lb,
-body:has(#tela-op.ativa) .lm-cargo{color:#5a6478}
-body:has(#tela-op.ativa) .pb2{background:#dfe4ee}
-body:has(#tela-op.ativa) .opt,
-body:has(#tela-op.ativa) .esc-btn,
-body:has(#tela-op.ativa) .ns-btn,
-body:has(#tela-op.ativa) .st-btn,
-body:has(#tela-op.ativa) .op-sc,
-body:has(#tela-op.ativa) .btn,
-body:has(#tela-op.ativa) .mf button,
-body:has(#tela-op.ativa) input,
-body:has(#tela-op.ativa) select,
-body:has(#tela-op.ativa) textarea{background:#f6f8fb;border-color:#c9d1df;color:#141a26}
-body:has(#tela-op.ativa) .opt:hover,
-body:has(#tela-op.ativa) .esc-btn:hover,
-body:has(#tela-op.ativa) .ns-btn:hover,
-body:has(#tela-op.ativa) .st-btn:hover,
-body:has(#tela-op.ativa) .btn:hover,
-body:has(#tela-op.ativa) .mf button:hover{background:#e9edf4}
-body:has(#tela-op.ativa) .opt.sel{background:#fff0e8;border-color:#FF4D00}
-body:has(#tela-op.ativa) .ns-btn.on{background:#e1e6ef;border-color:#7a85a0;color:#141a26}
-body:has(#tela-op.ativa) .st-btn.bad{color:#b0281a;border-color:#e74c3c}
-body:has(#tela-op.ativa) .script-box{background:#e8f2fc;color:#164f86}
-body:has(#tela-op.ativa) .btn-p,
-body:has(#tela-op.ativa) .mf .mc{color:#fff!important}
+body:has(#tela-op.ativa) #tela-op [style*="color:#0f7a55"]{color:var(--opb-ok)!important}
+body:has(#tela-op.ativa) #tela-op [style*="color:#9a6200"]{color:var(--opb-amb)!important}
+body:has(#tela-op.ativa) #tela-op [style*="color:#b8312a"]{color:var(--opb-ver)!important}
+body:has(#tela-op.ativa) #tela-op [style*="color:#1d5fa8"]{color:var(--opb-azu)!important}
+body:has(#tela-op.ativa) #tela-op [style*="color:#c94400"]{color:var(--opb-lar)!important}
+body[data-op-brilho="4"]{--opb-ok:#2dc98e;--opb-amb:#f0b840;--opb-ver:#f09595;--opb-azu:#7ec3f0;--opb-lar:#FF7A40}
+body[data-op-brilho="4"] #tela-op.ativa [style*="color:#636d88"]{color:#9aa3b8!important}
+body[data-op-brilho="4"] #tela-op.ativa [style*="color:#8b95aa"]{color:#a9b2c4!important}
+body[data-op-brilho="4"] #tela-op.ativa .st-btn.bad{color:#f09595;border-color:#e74c3c}
+/* v28 — brilho da tela do agente: 0 Claro (padrão v19) · 1 Suave · 2 Médio · 3 Escuro · 4 Noturno (tema escuro original) */
+body{--opb-pag:#eef1f6;--opb-tx0:#1c2333;--opb-sup:#ffffff;--opb-bd1:#d5dbe6;--opb-tx2:#4a5468;--opb-tx1:#141a26;--opb-tx3:#5a6478;--opb-trk:#dfe4ee;--opb-cmp:#f6f8fb;--opb-bd2:#c9d1df;--opb-hov:#e9edf4;--opb-sel:#fff0e8;--opb-on:#e1e6ef;--opb-onb:#7a85a0;--opb-bad:#b0281a;--opb-scb:#e8f2fc;--opb-sct:#164f86;--opb-alt:#f1f4f9;--opb-tx4:#3a4458;--opb-ok:#0f7a55;--opb-amb:#9a6200;--opb-azu:#1d5fa8;--opb-ver:#b8312a;--opb-lar:#c94400}
+body[data-op-brilho="1"]{--opb-ok:#0b6345;--opb-amb:#7d5000;--opb-pag:#d9dde5;--opb-sup:#eceff4;--opb-cmp:#e3e7ee;--opb-alt:#e0e4eb;--opb-hov:#d5dae3;--opb-bd1:#c3c9d4;--opb-bd2:#b9c0cc;--opb-trk:#c8ced9;--opb-on:#d0d5de;--opb-sel:#f5dfd2;--opb-scb:#d6e3f1}
+body[data-op-brilho="2"]{--opb-pag:#9aa2b1;--opb-sup:#b9c0cc;--opb-cmp:#c4cad5;--opb-alt:#b3bac6;--opb-hov:#aab1be;--opb-bd1:#8a92a2;--opb-bd2:#7f8798;--opb-trk:#a4acb9;--opb-on:#a9b0bd;--opb-onb:#4a5468;--opb-sel:#e2bfa9;--opb-scb:#a9bfd6;--opb-sct:#0c3a66;--opb-tx0:#0e121b;--opb-tx1:#0b0f17;--opb-tx2:#1f2632;--opb-tx3:#262d3a;--opb-tx4:#1f2632;--opb-ok:#064a32;--opb-amb:#5e3c00;--opb-azu:#0e3a6e;--opb-ver:#7e1a14;--opb-lar:#7a2800;--opb-bad:#7e1a14}
+body[data-op-brilho="3"]{--opb-pag:#2a3142;--opb-sup:#353d50;--opb-cmp:#3d465b;--opb-alt:#323a4c;--opb-hov:#465068;--opb-bd1:#475066;--opb-bd2:#525c74;--opb-trk:#475066;--opb-on:#465068;--opb-onb:#8b95aa;--opb-sel:#5a3a2e;--opb-scb:#24405e;--opb-sct:#b9dcfa;--opb-tx0:#eef1f6;--opb-tx1:#f2f4fa;--opb-tx2:#c4cad8;--opb-tx3:#aeb6c6;--opb-tx4:#c4cad8;--opb-ok:#4fd9a3;--opb-amb:#f0b840;--opb-azu:#7ec3f0;--opb-ver:#f7b4b4;--opb-lar:#FF7A40;--opb-bad:#f7b4b4}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]){background:var(--opb-pag);color:var(--opb-tx0)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) #tela-op.ativa{background:var(--opb-pag)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .op-topbar{background:var(--opb-sup);border-bottom-color:var(--opb-bd1)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .op-tb-sub{color:var(--opb-tx2)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .op-card,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .card,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .mbox{background:var(--opb-sup);border-color:var(--opb-bd1)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .perg-num,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .op-sl,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) label{color:var(--opb-tx2)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .perg-txt,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .op-sv,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .m-title,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .lm-nome{color:var(--opb-tx1)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .instrucao,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .esc-lb,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .lm-cargo{color:var(--opb-tx3)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .pb2{background:var(--opb-trk)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .opt,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .esc-btn,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .ns-btn,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .st-btn,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .op-sc,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .btn,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .mf button,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) input,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) select,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) textarea{background:var(--opb-cmp);border-color:var(--opb-bd2);color:var(--opb-tx1)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .opt:hover,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .esc-btn:hover,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .ns-btn:hover,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .st-btn:hover,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .btn:hover,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .mf button:hover{background:var(--opb-hov)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .opt.sel{background:var(--opb-sel);border-color:#FF4D00}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .ns-btn.on{background:var(--opb-on);border-color:var(--opb-onb);color:var(--opb-tx1)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .st-btn.bad{color:var(--opb-bad);border-color:#e74c3c}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .script-box{background:var(--opb-scb);color:var(--opb-sct)}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .btn-p,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .mf .mc{color:#fff!important}
 /* estilos escritos direto nos elementos */
-body:has(#tela-op.ativa) [style*="background:#1e2433"],
-body:has(#tela-op.ativa) [style*="background:#1a1d2e"],
-body:has(#tela-op.ativa) [style*="background:#1d2638"],
-body:has(#tela-op.ativa) [style*="background:#252d40"],
-body:has(#tela-op.ativa) [style*="background:#252e44"]{background:#f1f4f9!important}
-body:has(#tela-op.ativa) [style*="background:#2e3850"],
-body:has(#tela-op.ativa) [style*="background:#272f42"]{background:#f6f8fb!important}
-body:has(#tela-op.ativa) [style*="#3a4560"]{border-color:#c9d1df!important}
-body:has(#tela-op.ativa) [style*="color:#f0f2f8"],
-body:has(#tela-op.ativa) [style*="color:#f2f4fa"],
-body:has(#tela-op.ativa) [style*="color:#e8eaf0"],
-body:has(#tela-op.ativa) [style*="color:#d0d4e0"]{color:#141a26!important}
-body:has(#tela-op.ativa) [style*="color:#c4cad8"]{color:#3a4458!important}
-body:has(#tela-op.ativa) [style*="color:#8b95aa"],
-body:has(#tela-op.ativa) [style*="color:#636d88"],
-body:has(#tela-op.ativa) [style*="color:#aaa"]{color:#5a6478!important}
-body:has(#tela-op.ativa) [style*="color:#2dc98e"]{color:#0f7a55!important}
-body:has(#tela-op.ativa) [style*="color:#f0b840"]{color:#9a6200!important}
-body:has(#tela-op.ativa) [style*="color:#60a8e8"],
-body:has(#tela-op.ativa) [style*="color:#7ec3f0"],
-body:has(#tela-op.ativa) [style*="color:#7eb6ff"]{color:#1d5fa8!important}
-body:has(#tela-op.ativa) [style*="color:#f07070"],
-body:has(#tela-op.ativa) [style*="color:#f09595"]{color:#b8312a!important}
-body:has(#tela-op.ativa) [style*="color:#FF7A40"],
-body:has(#tela-op.ativa) [style*="color:#FF7E3A"],
-body:has(#tela-op.ativa) [style*="color:#FF6B2B"]{color:#c94400!important}
-body:has(#tela-op.ativa) [style*="background:#3a4560"]{background:#e1e6ef!important;color:#3a4458!important}
-body:has(#tela-op.ativa) .op-topbar .chip,
-body:has(#tela-op.ativa) .op-topbar [class*="ch-g"]{color:#0f7a55}
-#tela-op.ativa input,#tela-op.ativa select,#tela-op.ativa textarea{background:#f6f8fb!important;color:#141a26!important;border-color:#c9d1df}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="background:#1e2433"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="background:#1a1d2e"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="background:#1d2638"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="background:#252d40"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="background:#252e44"]{background:var(--opb-alt)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="background:#2e3850"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="background:#272f42"]{background:var(--opb-cmp)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="#3a4560"]{border-color:var(--opb-bd2)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#f0f2f8"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#f2f4fa"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#e8eaf0"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#d0d4e0"]{color:var(--opb-tx1)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#c4cad8"]{color:var(--opb-tx4)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#8b95aa"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#636d88"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#aaa"]{color:var(--opb-tx3)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#2dc98e"]{color:var(--opb-ok)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#f0b840"]{color:var(--opb-amb)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#60a8e8"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#7ec3f0"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#7eb6ff"]{color:var(--opb-azu)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#f07070"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#f09595"]{color:var(--opb-ver)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#FF7A40"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#FF7E3A"],
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="color:#FF6B2B"]{color:var(--opb-lar)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) [style*="background:#3a4560"]{background:var(--opb-on)!important;color:var(--opb-tx4)!important}
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .op-topbar .chip,
+body:has(#tela-op.ativa):not([data-op-brilho="4"]) .op-topbar [class*="ch-g"]{color:var(--opb-ok)}
+body:not([data-op-brilho="4"]) #tela-op.ativa input,body:not([data-op-brilho="4"]) #tela-op.ativa select,body:not([data-op-brilho="4"]) #tela-op.ativa textarea{background:var(--opb-cmp)!important;color:var(--opb-tx1)!important;border-color:var(--opb-bd2)}
 
 /* ── MODAIS ── */
 .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;align-items:center;justify-content:center;padding:1rem}
@@ -4186,7 +4200,7 @@ let DB = {
   senhaAdmin: loadDB('senha_admin', 'admin123'),
 };
 window.DB = DB; // expõe no window pra ser acessível de outros scripts (sincronização Supabase)
-window.__CALLBUILD__ = 'case-v27-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
+window.__CALLBUILD__ = 'brilho-v28-2026-11-27'; // marcador de versao: confira no console com console.log(window.__CALLBUILD__)
 console.log('%c[CallData] build:', 'color:#E8A020;font-weight:bold', window.__CALLBUILD__);
 
 // LIMPEZA AGRESSIVA: remove operadores do localStorage assim que o sistema carrega.
@@ -18884,6 +18898,36 @@ async function abrirAbordagemOp(){
 }
 window.abrirAbordagemOp = abrirAbordagemOp;
 
+// ═══ v28 — BRILHO DA TELA DO AGENTE ═══
+// 5 níveis (0 Claro … 4 Noturno). A escolha fica gravada NESTE computador.
+const _OP_BRILHO_NOMES = ['Claro', 'Suave', 'Médio', 'Escuro', 'Noturno'];
+function _opBrilhoLer() {
+  try { const v = parseInt(localStorage.getItem('call_op_brilho'), 10); return (v >= 0 && v <= 4) ? v : 0; } catch (e) { return 0; }
+}
+function _opBrilhoAplicar(v) {
+  v = Math.max(0, Math.min(4, parseInt(v, 10) || 0));
+  if (document.body) document.body.setAttribute('data-op-brilho', String(v));
+  const r = document.getElementById('op-brilho-rot'); if (r) r.textContent = _OP_BRILHO_NOMES[v];
+  return v;
+}
+function _opBrilhoMudar(v) {
+  v = _opBrilhoAplicar(v);
+  try { localStorage.setItem('call_op_brilho', String(v)); } catch (e) {}
+}
+window._opBrilhoMudar = _opBrilhoMudar;
+function _opBrilhoControleHtml() {
+  const v = _opBrilhoLer();
+  return `<div class="op-card" style="display:flex;align-items:center;gap:10px;padding:10px 14px;flex-wrap:wrap">
+    <span style="font-size:13px;font-weight:700;color:#c4cad8">Tela</span>
+    <span aria-hidden="true">☀</span>
+    <input type="range" min="0" max="4" step="1" value="${v}" oninput="_opBrilhoMudar(this.value)" aria-label="Brilho da tela" style="flex:1;min-width:140px;accent-color:#FF4D00">
+    <span aria-hidden="true">🌙</span>
+    <span id="op-brilho-rot" style="font-size:12px;font-weight:700;color:#c4cad8;min-width:58px">${_OP_BRILHO_NOMES[v]}</span>
+  </div>`;
+}
+if (document.body) _opBrilhoAplicar(_opBrilhoLer());
+else document.addEventListener('DOMContentLoaded', () => _opBrilhoAplicar(_opBrilhoLer()));
+
 function renderOpInicio() {
   if (window._opEntrevistaAtiva) {
     console.warn('[op] tela inicial bloqueada: entrevista em andamento (atualização em segundo plano ignorada)');
@@ -19181,6 +19225,7 @@ function renderOpInicio() {
   </div>`;
 
   document.getElementById('op-body').innerHTML = `
+    ${_opBrilhoControleHtml()}
     ${msgCard}
     ${telCard}
     <div class="op-card">
